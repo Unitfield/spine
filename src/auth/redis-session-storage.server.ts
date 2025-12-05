@@ -35,9 +35,12 @@ function getRedis(): Redis {
 // Redis Key Patterns
 // ============================================================================
 
+// Prefix for Redis keys - allows multiple apps to share the same Redis instance
+const KEY_PREFIX = process.env.REDIS_KEY_PREFIX || '';
+
 const REDIS_KEYS = {
-  oauthState: (stateId: string) => `oauth:state:${stateId}`,
-  session: (sessionId: string) => `session:${sessionId}`,
+  oauthState: (stateId: string) => `${KEY_PREFIX}oauth:state:${stateId}`,
+  session: (sessionId: string) => `${KEY_PREFIX}session:${sessionId}`,
 };
 
 // TTL constants

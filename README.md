@@ -7,10 +7,10 @@ Core infrastructure package for multi-tenant SaaS applications. Provides authent
 ## Installation
 
 ```bash
-# GitHub Packages'tan
+# GitHub Packages
 pnpm add @mimir/core
 
-# veya local development için
+# local development
 cd mimir-core && pnpm link --global
 cd your-app && pnpm link --global @mimir/core
 ```
