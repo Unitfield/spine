@@ -47,6 +47,15 @@ const REDIS_KEYS = {
 const OAUTH_STATE_TTL = 10 * 60; // 10 minutes in seconds
 const SESSION_TTL = 60 * 60 * 24 * 7; // 7 days in seconds
 
+// Session cookie name - MUST be unique per application to prevent session conflicts
+// When multiple apps run on the same domain (e.g., localhost), they will overwrite each other's
+// session cookies if they use the same cookie name
+const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || '__session_id';
+
+// Auth error cookie prefix - derived from session cookie name to prevent conflicts
+// between multiple apps on the same domain
+export const AUTH_ERROR_COOKIE_PREFIX = SESSION_COOKIE_NAME.replace('_session', '').replace('__', '');
+
 // ============================================================================
 // Session Storage
 // ============================================================================
@@ -54,7 +63,7 @@ const SESSION_TTL = 60 * 60 * 24 * 7; // 7 days in seconds
 function createRedisSessionStorage() {
   return createSessionStorage<SessionData, SessionFlashData>({
     cookie: {
-      name: '__session_id',
+      name: SESSION_COOKIE_NAME,
       httpOnly: true,
       maxAge: SESSION_TTL,
       path: '/',

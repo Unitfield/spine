@@ -22,9 +22,16 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
 
     if (!sessionData.refreshToken || sessionData.refreshToken.length === 0) {
       if (sessionData.expiresAt && Date.now() >= sessionData.expiresAt) {
-        logger.info('Token expired and no refresh token, forcing logout');
+        logger.info('Token expired and no refresh token, forcing app-specific logout');
         const { logout } = await import('./auth.server');
-        throw await logout(request);
+        // Use client_id_only=true for automatic logout (app-specific)
+        const logoutUrl = new URL(request.url);
+        logoutUrl.pathname = '/auth/logout';
+        logoutUrl.searchParams.set('client_id_only', 'true');
+        const logoutRequest = new Request(logoutUrl.toString(), {
+          headers: request.headers,
+        });
+        throw await logout(logoutRequest);
       }
       return false;
     }
@@ -78,9 +85,16 @@ async function autoRefreshTokens(request: Request): Promise<void> {
         logger.error('Auto-refresh failed', undefined, { error: result.error });
 
         if (result.shouldLogout) {
-          logger.error('Refresh token invalid, forcing logout');
+          logger.error('Refresh token invalid, forcing app-specific logout');
           const { logout } = await import('./auth.server');
-          throw await logout(request);
+          // Use client_id_only=true for automatic logout (app-specific)
+          const logoutUrl = new URL(request.url);
+          logoutUrl.pathname = '/auth/logout';
+          logoutUrl.searchParams.set('client_id_only', 'true');
+          const logoutRequest = new Request(logoutUrl.toString(), {
+            headers: request.headers,
+          });
+          throw await logout(logoutRequest);
         }
       }
     }

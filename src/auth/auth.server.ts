@@ -21,19 +21,63 @@ import {
   createOAuthState,
   getOAuthState,
   deleteOAuthState,
+  AUTH_ERROR_COOKIE_PREFIX,
 } from './redis-session-storage.server';
 import type { 
   AuthConfig, 
   UserInfo, 
   SessionData, 
   OAuthState,
-  TokenRefreshResult 
+  TokenRefreshResult,
+  LoginOptions,
+  ApplicationType,
+  AuthError
 } from './types';
 import { logger } from '../logging';
 
 // ============================================================================
 // Configuration
 // ============================================================================
+
+/**
+ * Get effective SSO logout setting based on config
+ */
+function getEffectiveSsoLogout(config: AuthConfig): boolean {
+  // Explicit setting takes precedence
+  if (config.ssoLogout !== undefined) {
+    return config.ssoLogout;
+  }
+  
+  // Determine by application type
+  switch (config.applicationType) {
+    case 'dashboard':
+      return true; // Dashboard needs full logout (no landing page)
+    case 'tenant-app':
+      return false; // Tenant app uses app-specific logout
+    default:
+      return false; // Default to app-specific logout
+  }
+}
+
+/**
+ * Get effective hasLandingPage setting based on config
+ */
+function getEffectiveHasLandingPage(config: AuthConfig): boolean {
+  // Explicit setting takes precedence
+  if (config.hasLandingPage !== undefined) {
+    return config.hasLandingPage;
+  }
+  
+  // Determine by application type
+  switch (config.applicationType) {
+    case 'dashboard':
+      return false; // Dashboard has no landing page
+    case 'tenant-app':
+      return true; // Tenant app has landing page
+    default:
+      return true; // Default to having a landing page
+  }
+}
 
 /**
  * Create OAuth configuration from environment variables
@@ -51,6 +95,24 @@ function createAuthConfig(): AuthConfig {
     }
   }
 
+  // Parse application type from env
+  const appTypeEnv = process.env.OIDC_APPLICATION_TYPE?.toLowerCase();
+  let applicationType: ApplicationType = 'custom';
+  if (appTypeEnv === 'dashboard') {
+    applicationType = 'dashboard';
+  } else if (appTypeEnv === 'tenant-app' || appTypeEnv === 'tenant_app') {
+    applicationType = 'tenant-app';
+  }
+
+  // Parse boolean env vars
+  const ssoLogout = process.env.OIDC_SSO_LOGOUT !== undefined
+    ? process.env.OIDC_SSO_LOGOUT === 'true'
+    : undefined;
+    
+  const hasLandingPage = process.env.OIDC_HAS_LANDING_PAGE !== undefined
+    ? process.env.OIDC_HAS_LANDING_PAGE === 'true'
+    : undefined;
+
   return {
     authority: requiredEnvVars.authority!,
     clientId: requiredEnvVars.clientId!,
@@ -58,6 +120,9 @@ function createAuthConfig(): AuthConfig {
     redirectUri: requiredEnvVars.redirectUri!,
     scope: process.env.OIDC_SCOPE || 'openid offline_access api',
     postLogoutRedirectUri: process.env.OIDC_POST_LOGOUT_REDIRECT_URI,
+    applicationType,
+    ssoLogout,
+    hasLandingPage,
   };
 }
 
@@ -285,15 +350,110 @@ async function createSessionData(
 }
 
 // ============================================================================
+// Auth Error Handling
+// ============================================================================
+
+// Auth error cookie names - unique per application to prevent conflicts
+const AUTH_ERROR_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error`;
+const AUTH_ERROR_DESC_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error_desc`;
+const OAUTH_STATE_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_oauth_state_id`;
+
+/**
+ * Check if there's an auth error in cookies
+ * 
+ * This should be called by apps (especially those without landing pages like Dashboard)
+ * BEFORE starting OAuth flow to prevent redirect loops.
+ * 
+ * @example
+ * ```ts
+ * // In dashboard's index route loader
+ * const authError = getAuthError(request);
+ * if (authError) {
+ *   return { authError }; // Show error to user
+ * }
+ * // No error, proceed with session check
+ * const user = await getUser(request);
+ * if (!user) {
+ *   return login(request);
+ * }
+ * ```
+ */
+export function getAuthError(request: Request): AuthError | null {
+  const cookies = request.headers.get('Cookie');
+  if (!cookies) return null;
+  
+  // Parse auth_error cookie (app-specific)
+  const errorRegex = new RegExp(`${AUTH_ERROR_COOKIE}=([^;]+)`);
+  const errorMatch = cookies.match(errorRegex);
+  if (!errorMatch) return null;
+  
+  const error = decodeURIComponent(errorMatch[1]);
+  if (!error) return null;
+  
+  // Parse auth_error_description cookie (app-specific)
+  const descRegex = new RegExp(`${AUTH_ERROR_DESC_COOKIE}=([^;]+)`);
+  const descMatch = cookies.match(descRegex);
+  const description = descMatch ? decodeURIComponent(descMatch[1]) : undefined;
+  
+  return { error, description };
+}
+
+/**
+ * Clear auth error cookies
+ * 
+ * Call this after displaying the error to the user
+ */
+export function clearAuthErrorHeaders(): Headers {
+  const headers = new Headers();
+  headers.append('Set-Cookie', `${AUTH_ERROR_COOKIE}=; Path=/; Max-Age=0`);
+  headers.append('Set-Cookie', `${AUTH_ERROR_DESC_COOKIE}=; Path=/; Max-Age=0`);
+  return headers;
+}
+
+/**
+ * Check if request has auth error (quick check without parsing)
+ */
+export function hasAuthError(request: Request): boolean {
+  const cookies = request.headers.get('Cookie');
+  return cookies?.includes(`${AUTH_ERROR_COOKIE}=`) ?? false;
+}
+
+// ============================================================================
 // Auth Functions
 // ============================================================================
 
 /**
  * Initiate OAuth login flow
+ * 
+ * @param request - The incoming request
+ * @param returnUrlOrOptions - Either a return URL string or LoginOptions object
  */
-export async function login(request: Request, returnUrl?: string): Promise<Response> {
+export async function login(
+  request: Request, 
+  returnUrlOrOptions?: string | LoginOptions
+): Promise<Response> {
   try {
     const config = getAuthConfig();
+    
+    // Parse options
+    const options: LoginOptions = typeof returnUrlOrOptions === 'string' 
+      ? { returnUrl: returnUrlOrOptions }
+      : returnUrlOrOptions || {};
+
+    // Check for auth_error cookie to prevent redirect loops
+    const cookies = request.headers.get('Cookie');
+    const hasError = cookies?.includes(`${AUTH_ERROR_COOKIE}=`);
+    if (hasError) {
+      logger.warn('Auth error cookie detected, preventing redirect loop');
+      // Clear the error cookie and redirect to home
+      const headers = new Headers();
+      headers.append('Set-Cookie', `${AUTH_ERROR_COOKIE}=; Path=/; Max-Age=0`);
+      // Use redirectUri to get correct base URL with port
+      const redirectUri = new URL(config.redirectUri);
+      const baseUrl = redirectUri.origin;
+      return redirect(baseUrl, { headers });
+    }
+
     const { authorizationServer, client } = await getOAuthConfig();
 
     // Generate PKCE challenge
@@ -309,11 +469,11 @@ export async function login(request: Request, returnUrl?: string): Promise<Respo
       state,
       codeVerifier,
       nonce,
-      returnUrl,
+      returnUrl: options.returnUrl,
       createdAt: Date.now(),
     };
 
-    logger.info('Creating OAuth state', { returnUrl });
+    logger.info('Creating OAuth state', { returnUrl: options.returnUrl, prompt: options.prompt });
 
     // Store OAuth state in Redis
     const stateId = await createOAuthState(oauthState);
@@ -328,12 +488,28 @@ export async function login(request: Request, returnUrl?: string): Promise<Respo
     authorizationUrl.searchParams.set('code_challenge', codeChallenge);
     authorizationUrl.searchParams.set('code_challenge_method', 'S256');
     authorizationUrl.searchParams.set('nonce', nonce);
+    
+    // Add prompt parameter if specified
+    if (options.prompt) {
+      authorizationUrl.searchParams.set('prompt', options.prompt);
+    }
 
-    // Store stateId in cookie for callback
+    // Store stateId in cookie for callback (app-specific to prevent conflicts)
     const headers = new Headers();
-    headers.append('Set-Cookie', `oauth_state_id=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+    headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
 
-    logger.info('OAuth authorization flow initiated', { state, stateId });
+    // DEBUG: Log full authorization URL and config
+    logger.info('🔍 DEBUG: OAuth login config', {
+      clientId: config.clientId,
+      redirectUri: config.redirectUri,
+      postLogoutRedirectUri: config.postLogoutRedirectUri,
+      scope: config.scope,
+      authority: config.authority,
+      authorizationEndpoint: authorizationServer.authorization_endpoint,
+      fullAuthUrl: authorizationUrl.toString()
+    });
+
+    logger.info('OAuth authorization flow initiated', { state, stateId, prompt: options.prompt });
     return redirect(authorizationUrl.toString(), { headers });
   } catch (error) {
     logger.error('Failed to initiate OAuth login', error instanceof Error ? error : undefined);
@@ -343,19 +519,106 @@ export async function login(request: Request, returnUrl?: string): Promise<Respo
 
 /**
  * Handle OAuth callback
+ * 
+ * Handles OAuth authorization response including success and error cases.
+ * 
+ * Error Handling:
+ * - `access_denied`: User doesn't have access to this application
+ *   - For apps with landing page: Redirect home with error cookie
+ *   - For apps without landing page: Redirect home with error cookie (must handle specially)
+ * - `login_required`: No active identity session
+ *   - Redirect to home to start fresh login
  */
 export async function handleCallback(request: Request): Promise<Response> {
   try {
     const config = getAuthConfig();
+    const hasLandingPage = getEffectiveHasLandingPage(config);
     const url = new URL(request.url);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
     const error = url.searchParams.get('error');
+    const errorDescription = url.searchParams.get('error_description');
+
+    // DEBUG: Log callback URL and params
+    logger.info('🔍 DEBUG: OAuth callback received', {
+      fullUrl: url.toString(),
+      origin: url.origin,
+      pathname: url.pathname,
+      hasCode: !!code,
+      hasState: !!state,
+      error,
+      errorDescription,
+      clientId: config.clientId,
+      redirectUri: config.redirectUri
+    });
 
     // Handle OAuth errors
     if (error) {
-      logger.error('OAuth callback error', undefined, { error });
-      throw new Error(`OAuth error: ${error}`);
+      logger.error('OAuth callback error', undefined, { 
+        error, 
+        errorDescription,
+        clientId: config.clientId,
+        applicationType: config.applicationType,
+        hasLandingPage
+      });
+      
+      // Handle access_denied specially - user doesn't have access to this app
+      // This can happen when identity cookie is valid but user has no access to this client
+      if (error === 'access_denied') {
+        logger.warn('Access denied for this application', { clientId: config.clientId });
+        // Clear any existing session and redirect to home without triggering new login
+        const headers = await destroyAuthSession(request);
+        // Set error cookies to:
+        // 1. Prevent redirect loop (auth_error)
+        // 2. Allow UI to show appropriate message (auth_error_type, auth_error_description)
+        headers.append(
+          'Set-Cookie',
+          `${AUTH_ERROR_COOKIE}=access_denied; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
+        );
+        headers.append(
+          'Set-Cookie',
+          `${AUTH_ERROR_DESC_COOKIE}=${encodeURIComponent(errorDescription || 'You do not have access to this application.')}; Path=/; SameSite=Lax; Max-Age=300`
+        );
+        // Use redirectUri to get the correct base URL with port
+        // request.url.origin can lose the port in some cases
+        const redirectUri = new URL(config.redirectUri);
+        const baseUrl = redirectUri.origin;
+        logger.info('Redirecting to /auth/login to show access_denied error', { 
+          hasLandingPage,
+          baseUrl,
+          configRedirectUri: config.redirectUri
+        });
+        // Redirect to /auth/login so user immediately sees the access denied page
+        // instead of landing page (which doesn't show the error)
+        return redirect(`${baseUrl}/auth/login`, { headers });
+      }
+      
+      // Handle login_required - session expired or user not logged in
+      if (error === 'login_required') {
+        logger.info('Login required, user session may have expired');
+        const headers = await destroyAuthSession(request);
+        // Use redirectUri to get correct base URL with port
+        const redirectUri = new URL(config.redirectUri);
+        const baseUrl = redirectUri.origin;
+        return redirect(baseUrl, { headers });
+      }
+      
+      // Handle other errors
+      const headers = await destroyAuthSession(request);
+      headers.append(
+        'Set-Cookie',
+        `${AUTH_ERROR_COOKIE}=${encodeURIComponent(error)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
+      );
+      if (errorDescription) {
+        headers.append(
+          'Set-Cookie',
+          `${AUTH_ERROR_DESC_COOKIE}=${encodeURIComponent(errorDescription)}; Path=/; SameSite=Lax; Max-Age=300`
+        );
+      }
+      // Use redirectUri to get correct base URL with port
+      const redirectUri = new URL(config.redirectUri);
+      const baseUrl = redirectUri.origin;
+      return redirect(baseUrl, { headers });
     }
 
     // Validate required parameters
@@ -363,9 +626,10 @@ export async function handleCallback(request: Request): Promise<Response> {
       throw new Error('Missing required callback parameters');
     }
 
-    // Get stateId from cookie
+    // Get stateId from cookie (app-specific)
     const cookies = request.headers.get('Cookie');
-    const cookieMatch = cookies?.match(/oauth_state_id=([^;]+)/);
+    const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
+    const cookieMatch = cookies?.match(oauthStateRegex);
     const stateId = cookieMatch?.[1];
 
     if (!stateId) {
@@ -456,9 +720,9 @@ export async function handleCallback(request: Request): Promise<Response> {
     // Clean up OAuth state from Redis
     await deleteOAuthState(stateId);
 
-    // Combine headers and clear OAuth state cookie
+    // Combine headers and clear OAuth state cookie (app-specific)
     const headers = new Headers(sessionHeaders);
-    headers.append('Set-Cookie', 'oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+    headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 
     logger.info('OAuth callback processed successfully');
 
@@ -471,7 +735,8 @@ export async function handleCallback(request: Request): Promise<Response> {
     // Try to clean up OAuth state on error
     try {
       const cookies = request.headers.get('Cookie');
-      const cookieMatch = cookies?.match(/oauth_state_id=([^;]+)/);
+      const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
+      const cookieMatch = cookies?.match(oauthStateRegex);
       const stateId = cookieMatch?.[1];
       if (stateId) {
         await deleteOAuthState(stateId);
@@ -487,19 +752,41 @@ export async function handleCallback(request: Request): Promise<Response> {
 
 /**
  * Logout user
+ * 
+ * Backend uses id_token_hint to identify which tokens to revoke.
+ * 
+ * **Scenario 1: Full SSO Logout (Manual Sign Out)**
+ * - Query param: sso_logout=true
+ * - Result: Full logout + identity cookie cleared
+ * - User must re-authenticate everywhere
+ * 
+ * **Scenario 2: Standard Logout (Automatic/Token Expired)**
+ * - No sso_logout param
+ * - Result: Tokens revoked based on id_token_hint
+ * - Backend determines which tokens to revoke
+ * 
+ * Configuration:
+ * - `OIDC_SSO_LOGOUT` env var ('true' | 'false') - default behavior
+ * - Query param `sso_logout=true` - override for full logout
  */
 export async function logout(request: Request): Promise<Response> {
   try {
     const config = getAuthConfig();
-    logger.info('Logout initiated');
+    const url = new URL(request.url);
+    
+    // Check for explicit sso_logout from query params
+    const ssoLogout = url.searchParams.get('sso_logout') === 'true' || getEffectiveSsoLogout(config);
+    const returnUrl = url.searchParams.get('returnUrl');
+    
+    logger.info('Logout initiated', { 
+      clientId: config.clientId,
+      ssoLogout
+    });
     
     const sessionData = await getAuthSession(request);
     const idToken = sessionData.idToken;
 
-    const url = new URL(request.url);
-    const returnUrl = url.searchParams.get('returnUrl');
-
-    // Destroy session
+    // Destroy local session
     const sessionHeaders = await destroyAuthSession(request);
     const headers = new Headers(sessionHeaders);
 
@@ -517,8 +804,23 @@ export async function logout(request: Request): Promise<Response> {
         const { authorizationServer } = await getOAuthConfig();
         if (authorizationServer.end_session_endpoint) {
           const endSessionUrl = new URL(authorizationServer.end_session_endpoint);
+          
+          // Backend uses id_token_hint to identify which tokens to revoke
           endSessionUrl.searchParams.set('id_token_hint', idToken);
-          logger.info('Redirecting to OAuth end_session');
+          
+          // Add sso_logout for full SSO logout (clears identity cookie)
+          if (ssoLogout) {
+            endSessionUrl.searchParams.set('sso_logout', 'true');
+            logger.info('Performing full SSO logout (identity cookie will be cleared)');
+          } else {
+            logger.info('Performing standard logout (tokens revoked based on id_token_hint)');
+          }
+          
+          // Add post_logout_redirect_uri if configured
+          if (config.postLogoutRedirectUri) {
+            endSessionUrl.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
+          }
+          
           return redirect(endSessionUrl.toString(), { headers });
         }
       } catch {

@@ -11,6 +11,9 @@ export type {
   AuthConfig,
   SessionData,
   OAuthState,
+  LoginOptions,
+  AuthError,
+  ApplicationType,
 } from './types';
 
 // Client-side hooks (if any future hooks are added)
