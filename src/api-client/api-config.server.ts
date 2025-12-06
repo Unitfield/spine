@@ -144,7 +144,7 @@ export function createAPIConfigFactory(
       }
 
       accessToken = token;
-      headers.Authorization = "Bearer ${token}";
+      headers.Authorization = `Bearer ${token}`;
       logger?.debug?.('Added authorization header to API config');
     }
 
