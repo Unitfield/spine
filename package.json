@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/mimir-core",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Mimir Core - Multi-tenant SaaS infrastructure for React Router applications",
   "type": "module",
   "main": "./dist/index.js",
