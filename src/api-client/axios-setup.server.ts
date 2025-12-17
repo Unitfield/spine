@@ -2,16 +2,69 @@
  * Axios Interceptor Setup for Auto-Generated API Clients
  *
  * This module enhances auto-generated Axios-based API clients with:
- * - Automatic token refresh on 401
+ * - Automatic token refresh on 401 (serialized to prevent race conditions)
  * - Retry logic with exponential backoff
  * - ProblemDetails error parsing
  * - Timeout management
  * - Comprehensive logging
+ *
+ * CRITICAL: Token refresh is serialized using a global promise queue.
+ * This prevents race conditions when multiple concurrent requests get 401
+ * and all try to refresh the token simultaneously (which would fail due
+ * to refresh token rotation - the second refresh would use an invalid token).
  */
 
 import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import type { ProblemDetails, RetryConfig, APILogger, TokenRefreshFn } from './types';
+import type { ProblemDetails, RetryConfig, APILogger, TokenRefreshFn, TokenRefreshResult } from './types';
 import { calculateBackoffDelay, isRetryableError } from './retry-handler';
+
+/**
+ * Global token refresh queue - prevents concurrent refresh attempts
+ * 
+ * When multiple requests get 401 simultaneously:
+ * 1. First request starts the refresh, creates a promise
+ * 2. Other requests wait for the same promise
+ * 3. When refresh completes, all waiting requests get the new token
+ * 4. This prevents refresh token rotation race conditions
+ */
+const refreshPromiseMap = new Map<string, Promise<TokenRefreshResult>>();
+
+/**
+ * Get or create a token refresh promise for a session
+ * Ensures only one refresh happens at a time per session
+ */
+function getOrCreateRefreshPromise(
+  sessionKey: string,
+  refreshFn: () => Promise<TokenRefreshResult>,
+  logger?: APILogger
+): Promise<TokenRefreshResult> {
+  // Check if there's already a refresh in progress for this session
+  const existingPromise = refreshPromiseMap.get(sessionKey);
+  if (existingPromise) {
+    logger?.info?.('Token refresh already in progress, waiting for existing refresh');
+    return existingPromise;
+  }
+
+  // Create new refresh promise
+  logger?.info?.('Starting new token refresh');
+  const refreshPromise = refreshFn().finally(() => {
+    // Clean up after refresh completes (success or failure)
+    refreshPromiseMap.delete(sessionKey);
+  });
+
+  refreshPromiseMap.set(sessionKey, refreshPromise);
+  return refreshPromise;
+}
+
+/**
+ * Extract session key from request for refresh deduplication
+ */
+function getSessionKeyFromRequest(request: Request): string {
+  // Use cookie header as session identifier (contains session ID)
+  const cookie = request.headers.get('cookie') || '';
+  // Use first 50 chars of cookie as key
+  return `session:${cookie.slice(0, 50)}`;
+}
 
 /**
  * Axios Setup Options
@@ -119,7 +172,14 @@ export function setupAxiosInterceptors(
 
           logger?.info?.('Received 401 from backend, attempting token refresh');
 
-          const refreshResult = await attemptTokenRefresh(request);
+          // CRITICAL: Use serialized token refresh to prevent race conditions
+          // Multiple concurrent 401s will share the same refresh promise
+          const sessionKey = getSessionKeyFromRequest(request);
+          const refreshResult = await getOrCreateRefreshPromise(
+            sessionKey,
+            () => attemptTokenRefresh(request),
+            logger
+          );
 
           if (refreshResult.success && refreshResult.newAccessToken) {
             logger?.info?.('Token refresh successful, retrying original request');
