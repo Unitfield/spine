@@ -1,4 +1,4 @@
-# @mimir/core
+# @eminuckan/mimir-core
 
 Core infrastructure package for multi-tenant SaaS applications. Provides authentication, authorization, multi-tenancy, and API client utilities.
 
@@ -7,12 +7,12 @@ Core infrastructure package for multi-tenant SaaS applications. Provides authent
 ## Installation
 
 ```bash
-# GitHub Packages
-pnpm add @mimir/core
+# npm (public)
+pnpm add @eminuckan/mimir-core
 
 # local development
 cd mimir-core && pnpm link --global
-cd your-app && pnpm link --global @mimir/core
+cd your-app && pnpm link --global @eminuckan/mimir-core
 ```
 
 ## Features
@@ -38,7 +38,7 @@ import {
   PermissionInitializer,
   createQueryClient,
   initializeSignalR,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 import { QueryClientProvider } from '@tanstack/react-query';
 
 // Create query client
@@ -77,7 +77,7 @@ import {
   createAuthServer,
   createRedisSessionStorage,
   createRouteProtection,
-} from '@mimir/core/server';
+} from '@eminuckan/mimir-core/server';
 import Redis from 'ioredis';
 
 const redis = new Redis(process.env.REDIS_URL);
@@ -110,7 +110,7 @@ export const { protectRoute, authRoute, guestRoute } = createRouteProtection(
 
 ```typescript
 // lib/api.server.ts
-import { createAPIConfigFactory } from '@mimir/core/server';
+import { createAPIConfigFactory } from '@eminuckan/mimir-core/server';
 import { getAccessToken } from './auth.server';
 import { getCurrentTenant } from './tenant.server';
 import { logger } from './logger';
@@ -138,7 +138,7 @@ import {
   createRouteProtection,
   type AuthConfig,
   type SessionData,
-} from '@mimir/core/server';
+} from '@eminuckan/mimir-core/server';
 ```
 
 #### createAuthServer(config)
@@ -220,7 +220,7 @@ import {
   // Types
   type PermissionCode,
   type PermissionCheckOptions,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Hooks
@@ -290,7 +290,7 @@ import {
   // Server
   createTenantServerFactory,
   createTenantCookieFactory,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Client Usage
@@ -322,7 +322,7 @@ function TenantSwitcher() {
 #### Server Usage
 
 ```typescript
-import { createTenantServerFactory } from '@mimir/core/server';
+import { createTenantServerFactory } from '@eminuckan/mimir-core/server';
 
 const { getCurrentTenant, setCurrentTenant, getAvailableTenants } = createTenantServerFactory(
   getSession,
@@ -360,7 +360,7 @@ import {
   clearIdentityContextCache,
   configureIdentityAPIFetcher,
   configurePermissionFetcher,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Client Usage
@@ -398,7 +398,7 @@ const permissions = useUserPermissions();
 #### Server Usage
 
 ```typescript
-import { configureIdentityAPIFetcher, getIdentityContext } from '@mimir/core/server';
+import { configureIdentityAPIFetcher, getIdentityContext } from '@eminuckan/mimir-core/server';
 
 // Configure API fetcher (once at startup)
 configureIdentityAPIFetcher(async (request) => {
@@ -437,7 +437,7 @@ import {
   createAPIConfigFactory,
   setupAxiosInterceptors,
   createEnhancedClient,
-} from '@mimir/core/server';
+} from '@eminuckan/mimir-core/server';
 ```
 
 #### API Config Factory
@@ -511,7 +511,7 @@ import {
   getIdentitySignalRClient,
   type SignalRClientConfig,
   type IdentityContextChangedEvent,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Usage
@@ -552,7 +552,7 @@ import {
   createQueryKeyFactory,
   invalidationHelpers,
   type QueryClientConfig,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Setup
@@ -614,7 +614,7 @@ import {
   Logger,
   LogLevel,
   type LoggerConfig,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 #### Usage
@@ -676,7 +676,7 @@ import type {
   // Logging
   LogLevel,
   LogEntry,
-} from '@mimir/core';
+} from '@eminuckan/mimir-core';
 ```
 
 ---
@@ -684,12 +684,12 @@ import type {
 ## Publishing
 
 ```bash
-# Login to GitHub Packages
-npm login --scope=@mimir --registry=https://npm.pkg.github.com
+# Login to npmjs (one-time)
+npm login
 
 # Build and publish
 pnpm build
-pnpm publish
+npm publish --access public
 ```
 
 ## Contributing

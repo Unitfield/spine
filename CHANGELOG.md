@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.16] - 2026-02-28
+
+### Changed
+- Switched publishing target to npmjs.org with public access.
+- Updated README package references and publishing instructions for npm public releases.
+- Included `LICENSE` in published package files.
+
 ## [0.1.2] - 2025-12-05
 
 ### Added

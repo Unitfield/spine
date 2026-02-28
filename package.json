@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/mimir-core",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Mimir Core - Multi-tenant SaaS infrastructure for React Router applications",
   "type": "module",
   "main": "./dist/index.js",
@@ -66,7 +66,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
@@ -102,8 +103,8 @@
     "node": ">=20.0.0"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",
