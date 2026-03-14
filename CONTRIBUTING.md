@@ -1,8 +1,8 @@
-# Contributing to Mimir Core
+# Contributing to Spine
 
 Thanks for contributing.
 
-Mimir is intended to be a reusable foundation for SaaS infrastructure, so changes should optimize for clarity, composability, and portability across products.
+Spine is intended to be a reusable foundation for SaaS infrastructure, so changes should optimize for clarity, composability, and portability across products.
 
 ## Before You Start
 

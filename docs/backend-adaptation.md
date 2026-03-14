@@ -1,6 +1,6 @@
 # Backend Adaptation
 
-Mimir should adapt to your backend, not force your backend to look like the original app it came from.
+Spine should adapt to your backend, not force your backend to look like the original app it came from.
 
 This guide covers the main extension points.
 
@@ -18,7 +18,7 @@ There are four major kinds of backend adaptation:
 Use `configureAuthClaimMapping` when your identity provider uses different claim names.
 
 ```ts
-import { configureAuthClaimMapping } from '@eminuckan/mimir-core/server';
+import { configureAuthClaimMapping } from '@eminuckan/spine/server';
 
 configureAuthClaimMapping({
   subject: ['sub', 'user_id'],
@@ -34,10 +34,10 @@ configureAuthClaimMapping({
 
 ## Identity API Fetching
 
-Use `configureIdentityAPIFetcher` to tell Mimir how to fetch the current identity context.
+Use `configureIdentityAPIFetcher` to tell Spine how to fetch the current identity context.
 
 ```ts
-import { configureIdentityAPIFetcher } from '@eminuckan/mimir-core/identity/server';
+import { configureIdentityAPIFetcher } from '@eminuckan/spine/identity/server';
 
 configureIdentityAPIFetcher(async (request) => {
   const response = await fetch('https://api.example.com/me/context', {
@@ -65,7 +65,7 @@ configureIdentityAPIFetcher(async (request) => {
 Use `configurePermissionFetcher` when permissions are loaded separately from identity context.
 
 ```ts
-import { configurePermissionFetcher } from '@eminuckan/mimir-core/identity/server';
+import { configurePermissionFetcher } from '@eminuckan/spine/identity/server';
 
 configurePermissionFetcher(async (request, tenantId) => {
   const response = await fetch(`https://api.example.com/tenants/${tenantId}/permissions`, {
@@ -84,7 +84,7 @@ configurePermissionFetcher(async (request, tenantId) => {
 Use `configureIdentityStore` if your app routes for identity context or logout differ.
 
 ```ts
-import { configureIdentityStore } from '@eminuckan/mimir-core/identity';
+import { configureIdentityStore } from '@eminuckan/spine/identity';
 
 configureIdentityStore({
   contextEndpoint: '/api/me/context',
@@ -109,7 +109,7 @@ configureIdentityStore({
 Use `configureTenantCookie` to match your app's cookie requirements.
 
 ```ts
-import { configureTenantCookie } from '@eminuckan/mimir-core/tenant/server';
+import { configureTenantCookie } from '@eminuckan/spine/tenant/server';
 
 configureTenantCookie({
   name: '__active-org',
@@ -131,7 +131,7 @@ This is especially useful when:
 Use `configureIdentityContextFetcher` so tenant helpers can derive tenant state from your identity context.
 
 ```ts
-import { configureIdentityContextFetcher } from '@eminuckan/mimir-core/tenant/server';
+import { configureIdentityContextFetcher } from '@eminuckan/spine/tenant/server';
 import { fetchIdentityContext } from './identity.server';
 
 configureIdentityContextFetcher(fetchIdentityContext);
@@ -142,7 +142,7 @@ configureIdentityContextFetcher(fetchIdentityContext);
 Use `configureRouteProtection` for product-specific route policy that still belongs close to auth.
 
 ```ts
-import { configureRouteProtection } from '@eminuckan/mimir-core/server';
+import { configureRouteProtection } from '@eminuckan/spine/server';
 
 configureRouteProtection({
   getLoginReturnUrl: ({ request }) => new URL(request.url).pathname,
@@ -160,10 +160,10 @@ Use this for framework/app coordination, not domain constants.
 
 ## Permission Route Protection
 
-Use `configurePermissionRouteProtection` to tell Mimir how to get the current session and permission context.
+Use `configurePermissionRouteProtection` to tell Spine how to get the current session and permission context.
 
 ```ts
-import { configurePermissionRouteProtection } from '@eminuckan/mimir-core/server';
+import { configurePermissionRouteProtection } from '@eminuckan/spine/server';
 
 configurePermissionRouteProtection({
   getSession: async (request) => {
@@ -186,7 +186,7 @@ configurePermissionRouteProtection({
 Use `createAPIConfigFactory` to keep auth and tenant resolution centralized.
 
 ```ts
-import { createAPIConfigFactory } from '@eminuckan/mimir-core/api-client/server';
+import { createAPIConfigFactory } from '@eminuckan/spine/api-client/server';
 
 const { createAPIConfig, getAPIBaseURL } = createAPIConfigFactory(
   getAccessToken,

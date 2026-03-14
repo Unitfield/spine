@@ -1,4 +1,4 @@
-# Releasing Mimir
+# Releasing Spine
 
 This guide covers local validation, GitHub release setup, and npm publishing.
 
@@ -28,14 +28,14 @@ Update the version in `package.json` and add a changelog entry.
 If the repository does not exist yet:
 
 ```bash
-gh repo create eminuckan/mimir-core --public --source=. --remote=origin --push
+gh repo create eminuckan/spine --public --source=. --remote=origin --push
 ```
 
 Useful follow-up commands:
 
 ```bash
-gh repo edit eminuckan/mimir-core --description "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access."
-gh repo edit eminuckan/mimir-core --homepage "https://github.com/eminuckan/mimir-core#readme"
+gh repo edit eminuckan/spine --description "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access."
+gh repo edit eminuckan/spine --homepage "https://github.com/eminuckan/spine#readme"
 ```
 
 ## npm Publishing
@@ -83,7 +83,7 @@ git push origin v0.2.0
 
 You are not authenticated with npm on the current machine.
 
-### `npm view @eminuckan/mimir-core version` returns 404
+### `npm view @eminuckan/spine version` returns 404
 
 The package is not currently published or the scope/package name is unavailable to the current user.
 

@@ -2,7 +2,7 @@
  * Auth module server exports.
  *
  * These exports are framework-agnostic. Framework adapters can re-export
- * them from their own namespaces such as `@eminuckan/mimir-core/react-router/server`.
+ * them from their own namespaces such as `@eminuckan/spine/react-router/server`.
  */
 
 export * from './auth.server';

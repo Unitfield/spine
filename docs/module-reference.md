@@ -1,14 +1,14 @@
 # Module Reference
 
-This is a high-level reference for Mimir's public surfaces.
+This is a high-level reference for Spine's public surfaces.
 
 ## Auth
 
 Server entry point:
 
-- `@eminuckan/mimir-core/auth/server`
-- `@eminuckan/mimir-core/server`
-- `@eminuckan/mimir-core/react-router/server`
+- `@eminuckan/spine/auth/server`
+- `@eminuckan/spine/server`
+- `@eminuckan/spine/react-router/server`
 
 Key exports:
 
@@ -34,11 +34,11 @@ Key exports:
 
 Client entry point:
 
-- `@eminuckan/mimir-core/tenant`
+- `@eminuckan/spine/tenant`
 
 Server entry point:
 
-- `@eminuckan/mimir-core/tenant/server`
+- `@eminuckan/spine/tenant/server`
 
 Key client exports:
 
@@ -69,11 +69,11 @@ Key server exports:
 
 Client entry point:
 
-- `@eminuckan/mimir-core/identity`
+- `@eminuckan/spine/identity`
 
 Server entry point:
 
-- `@eminuckan/mimir-core/identity/server`
+- `@eminuckan/spine/identity/server`
 
 Key client exports:
 
@@ -103,11 +103,11 @@ Key server exports:
 
 Client entry point:
 
-- `@eminuckan/mimir-core/permissions`
+- `@eminuckan/spine/permissions`
 
 Server entry point:
 
-- `@eminuckan/mimir-core/server`
+- `@eminuckan/spine/server`
 
 Key client exports:
 
@@ -140,11 +140,11 @@ Key server exports:
 
 Client entry point:
 
-- `@eminuckan/mimir-core/api-client`
+- `@eminuckan/spine/api-client`
 
 Server entry point:
 
-- `@eminuckan/mimir-core/api-client/server`
+- `@eminuckan/spine/api-client/server`
 
 Key server exports:
 
@@ -156,7 +156,7 @@ Key server exports:
 
 Entry point:
 
-- `@eminuckan/mimir-core/query-client`
+- `@eminuckan/spine/query-client`
 
 Key exports:
 
@@ -169,7 +169,7 @@ Key exports:
 
 Entry point:
 
-- `@eminuckan/mimir-core/logging`
+- `@eminuckan/spine/logging`
 
 The logging module provides typed logger configuration and a default service-level logger.
 
@@ -177,6 +177,6 @@ The logging module provides typed logger configuration and a default service-lev
 
 Entry point:
 
-- `@eminuckan/mimir-core/signalr`
+- `@eminuckan/spine/signalr`
 
 Use this module for generic realtime client helpers and types.

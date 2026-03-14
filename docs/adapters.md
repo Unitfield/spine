@@ -1,6 +1,6 @@
 # Adapters
 
-Mimir keeps framework-specific behavior behind adapter entry points.
+Spine keeps framework-specific behavior behind adapter entry points.
 
 ## Why Adapters Exist
 
@@ -17,8 +17,8 @@ Adapters solve that by providing a framework-shaped surface without polluting th
 
 Available entry points:
 
-- `@eminuckan/mimir-core/react-router`
-- `@eminuckan/mimir-core/react-router/server`
+- `@eminuckan/spine/react-router`
+- `@eminuckan/spine/react-router/server`
 
 Today these are thin aliases over the core exports. That is intentional.
 
@@ -43,7 +43,7 @@ Benefits:
 Example:
 
 ```ts
-import { authRoute, getAccessToken } from '@eminuckan/mimir-core/react-router/server';
+import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
 ```
 
 ## Writing a New Adapter
@@ -68,18 +68,18 @@ Those belong in the consuming application.
 
 The likely future shape is:
 
-- `@eminuckan/mimir-core/nextjs`
-- `@eminuckan/mimir-core/nextjs/server`
+- `@eminuckan/spine/nextjs`
+- `@eminuckan/spine/nextjs/server`
 
 The goal would be the same:
 
-- map Mimir core to Next.js primitives
+- map Spine core to Next.js primitives
 - keep reusable infrastructure in core
 - keep app policy local
 
 ## Adapter Checklist
 
-Before adding framework code to Mimir, ask:
+Before adding framework code to Spine, ask:
 
 - Is this actually framework-specific?
 - Does it belong in an adapter instead of core?

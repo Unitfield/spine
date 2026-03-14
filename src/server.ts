@@ -1,5 +1,5 @@
 ﻿/**
- * Mimir Core - Server Exports
+ * Spine - Server Exports
  *
  * Framework-agnostic server-side exports.
  */

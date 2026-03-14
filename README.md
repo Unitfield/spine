@@ -1,21 +1,21 @@
-# Mimir Core
+# Spine
 
 Framework-agnostic SaaS primitives for authentication, identity, permissions, multi-tenancy, API access, realtime events, query configuration, and logging.
 
-Mimir is designed around one idea: the reusable parts of a SaaS platform should live in a single package, while application policy and framework quirks should stay in thin adapters. Today the package ships a framework-agnostic core plus a React Router adapter surface. Future adapters can follow the same pattern.
+Spine is designed around one idea: the reusable parts of a SaaS platform should live in a single package, while application policy and framework quirks should stay in thin adapters. Today the package ships a framework-agnostic core plus a React Router adapter surface. Future adapters can follow the same pattern.
 
 ## Status
 
-- Core package: `@eminuckan/mimir-core`
-- Current adapter: `@eminuckan/mimir-core/react-router`
+- Core package: `@eminuckan/spine`
+- Current adapter: `@eminuckan/spine/react-router`
 - Server primitives use Web `Request`/`Response` objects, not framework-specific response helpers
 - React Router adapter is intentionally thin today so other adapters can be added without changing the core contract
 
-## Why Mimir
+## Why Spine
 
-Most internal app infrastructure starts the same way: one product grows an auth layer, a tenant switcher, permission checks, a query client, an API wrapper, and a realtime client. Then a second product appears and copies all of it. Mimir exists to stop that drift.
+Most internal app infrastructure starts the same way: one product grows an auth layer, a tenant switcher, permission checks, a query client, an API wrapper, and a realtime client. Then a second product appears and copies all of it. Spine exists to stop that drift.
 
-Mimir aims to be:
+Spine aims to be:
 
 - Framework-agnostic at its core
 - Adapter-friendly for framework integration
@@ -29,30 +29,30 @@ Mimir aims to be:
 - Configure, do not fork: backend claim names, cookie behavior, endpoints, and redirects should be configured first
 - Request/Response first: server modules should work anywhere a standard Web `Request` and `Response` exist
 - App policy stays local: onboarding flows, subscription gates, product-specific redirects, and permission taxonomies should live in the consuming app
-- Open for composition: apps should be able to wrap Mimir primitives instead of rewriting them
+- Open for composition: apps should be able to wrap Spine primitives instead of rewriting them
 
 ## Package Surfaces
 
 | Entry point | Purpose |
 | --- | --- |
-| `@eminuckan/mimir-core` | Client-side primitives and shared types |
-| `@eminuckan/mimir-core/server` | Framework-agnostic server primitives |
-| `@eminuckan/mimir-core/react-router` | React Router client adapter |
-| `@eminuckan/mimir-core/react-router/server` | React Router server adapter |
-| `@eminuckan/mimir-core/auth` | Auth types |
-| `@eminuckan/mimir-core/auth/server` | Auth/session/route protection primitives |
-| `@eminuckan/mimir-core/tenant` | Tenant store, provider, and types |
-| `@eminuckan/mimir-core/tenant/server` | Tenant cookie and server helpers |
-| `@eminuckan/mimir-core/identity` | Identity store/provider/types |
-| `@eminuckan/mimir-core/identity/server` | Identity context cache and server orchestration |
-| `@eminuckan/mimir-core/api-client` | Client-side API types and errors |
-| `@eminuckan/mimir-core/api-client/server` | Server-side API config and Axios helpers |
-| `@eminuckan/mimir-core/permissions` | Client-side permission primitives |
-| `@eminuckan/mimir-core/logging` | Logging primitives |
-| `@eminuckan/mimir-core/query-client` | TanStack Query helpers |
-| `@eminuckan/mimir-core/signalr` | Realtime client helpers |
+| `@eminuckan/spine` | Client-side primitives and shared types |
+| `@eminuckan/spine/server` | Framework-agnostic server primitives |
+| `@eminuckan/spine/react-router` | React Router client adapter |
+| `@eminuckan/spine/react-router/server` | React Router server adapter |
+| `@eminuckan/spine/auth` | Auth types |
+| `@eminuckan/spine/auth/server` | Auth/session/route protection primitives |
+| `@eminuckan/spine/tenant` | Tenant store, provider, and types |
+| `@eminuckan/spine/tenant/server` | Tenant cookie and server helpers |
+| `@eminuckan/spine/identity` | Identity store/provider/types |
+| `@eminuckan/spine/identity/server` | Identity context cache and server orchestration |
+| `@eminuckan/spine/api-client` | Client-side API types and errors |
+| `@eminuckan/spine/api-client/server` | Server-side API config and Axios helpers |
+| `@eminuckan/spine/permissions` | Client-side permission primitives |
+| `@eminuckan/spine/logging` | Logging primitives |
+| `@eminuckan/spine/query-client` | TanStack Query helpers |
+| `@eminuckan/spine/signalr` | Realtime client helpers |
 
-## What Mimir Includes
+## What Spine Includes
 
 - OAuth2/OIDC login, callback handling, logout, and token refresh
 - Redis-backed session and OAuth state storage
@@ -65,7 +65,7 @@ Mimir aims to be:
 - SignalR client helpers
 - Logging primitives
 
-## What Mimir Does Not Include
+## What Spine Does Not Include
 
 - Your product's onboarding rules
 - Your product's subscription rules
@@ -79,7 +79,7 @@ Those belong in the consuming app or in a product-specific adapter package.
 
 ```mermaid
 flowchart LR
-  A["Mimir Core"] --> B["Server Primitives"]
+  A["Spine"] --> B["Server Primitives"]
   A --> C["Client Primitives"]
   B --> D["Framework Adapter"]
   C --> D
@@ -89,7 +89,7 @@ flowchart LR
 
 The important boundary is between reusable infrastructure and product policy:
 
-- Mimir Core owns generic primitives
+- Spine owns generic primitives
 - Framework adapters own framework glue
 - Application adapters own product-specific routing, claims, endpoints, and workflow rules
 
@@ -98,7 +98,7 @@ Detailed architecture notes live in [docs/architecture.md](docs/architecture.md)
 ## Installation
 
 ```bash
-pnpm add @eminuckan/mimir-core
+pnpm add @eminuckan/spine
 ```
 
 If you use client-side React features, install peer dependencies too:
@@ -130,7 +130,7 @@ The built-in auth/session layer currently reads these environment variables:
 
 ### 1. Configure Identity and Tenant Adapters
 
-Mimir's server modules are generic, so your app should provide backend-specific fetchers once.
+Spine's server modules are generic, so your app should provide backend-specific fetchers once.
 
 ```ts
 // app/lib/mimir/identity.server.ts
@@ -139,10 +139,10 @@ import {
   configurePermissionFetcher,
   contextToUserInfo,
   getIdentityContext,
-} from '@eminuckan/mimir-core/identity/server';
-import { createAPIConfigFactory } from '@eminuckan/mimir-core/api-client/server';
-import { getAccessToken } from '@eminuckan/mimir-core/react-router/server';
-import { getCurrentTenant } from '@eminuckan/mimir-core/tenant/server';
+} from '@eminuckan/spine/identity/server';
+import { createAPIConfigFactory } from '@eminuckan/spine/api-client/server';
+import { getAccessToken } from '@eminuckan/spine/react-router/server';
+import { getCurrentTenant } from '@eminuckan/spine/tenant/server';
 import { Configuration, IdentityApi } from '~/lib/api-clients/api';
 
 const { createAPIConfig } = createAPIConfigFactory(getAccessToken, getCurrentTenant);
@@ -198,7 +198,7 @@ import {
   getAvailableTenants,
   getCurrentTenant,
   initializeTenant,
-} from '@eminuckan/mimir-core/tenant/server';
+} from '@eminuckan/spine/tenant/server';
 import { fetchIdentityContext } from './identity.server';
 
 configureTenantCookie({
@@ -222,8 +222,8 @@ export {
 import {
   configurePermissionRouteProtection,
   requirePermission,
-} from '@eminuckan/mimir-core/server';
-import { getAuthSession } from '@eminuckan/mimir-core/react-router/server';
+} from '@eminuckan/spine/server';
+import { getAuthSession } from '@eminuckan/spine/react-router/server';
 import { contextToUserInfo, getIdentityContext } from './identity.server';
 import { getCurrentTenant } from './tenant.server';
 
@@ -255,7 +255,7 @@ export { requirePermission };
 
 ```ts
 // app/routes/_protected.tsx
-import { authRoute, getAccessToken } from '@eminuckan/mimir-core/react-router/server';
+import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
 import { getCurrentTenant, initializeTenant } from '~/lib/mimir/tenant.server';
 import { contextToUserInfo, getIdentityContext } from '~/lib/mimir/identity.server';
 
@@ -300,7 +300,7 @@ import {
   IdentityContextProvider,
   PermissionInitializer,
   createQueryClient,
-} from '@eminuckan/mimir-core';
+} from '@eminuckan/spine';
 
 const queryClient = createQueryClient();
 
@@ -346,7 +346,7 @@ import {
   configureAuthClaimMapping,
   configureIdentityStore,
   configureRouteProtection,
-} from '@eminuckan/mimir-core/server';
+} from '@eminuckan/spine/server';
 
 configureAuthClaimMapping({
   tenantIds: ['organizations', 'tenant_ids'],
@@ -380,7 +380,7 @@ More adaptation examples live in [docs/backend-adaptation.md](docs/backend-adapt
 
 ## Current Boundaries
 
-Mimir already owns the reusable infrastructure for:
+Spine already owns the reusable infrastructure for:
 
 - Session lifecycle
 - OAuth state and token refresh
@@ -418,7 +418,7 @@ Detailed contributor guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Versioning
 
-Mimir currently uses semver with a `0.x` release line. Breaking changes can still happen more frequently than a mature `1.x` package, but they should be documented in [CHANGELOG.md](CHANGELOG.md).
+Spine currently uses semver with a `0.x` release line. Breaking changes can still happen more frequently than a mature `1.x` package, but they should be documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

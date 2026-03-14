@@ -1,5 +1,5 @@
 ﻿/**
- * Mimir Core
+ * Spine
  *
  * Framework-agnostic primitives for auth, permissions, tenant context,
  * identity, API access, realtime signaling, query configuration, and logging.

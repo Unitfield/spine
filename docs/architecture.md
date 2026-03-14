@@ -1,21 +1,21 @@
 # Architecture
 
-This document describes how Mimir is structured and where each kind of logic should live.
+This document describes how Spine is structured and where each kind of logic should live.
 
 ## Goals
 
-Mimir tries to solve a common problem in internal platform code:
+Spine tries to solve a common problem in internal platform code:
 
 - product A builds infrastructure
 - product B copies it
 - product C forks the copy
 - shared behavior starts drifting
 
-Mimir centralizes the reusable layer while keeping enough extension points for app-specific behavior.
+Spine centralizes the reusable layer while keeping enough extension points for app-specific behavior.
 
 ## Layer Model
 
-Mimir is organized into three layers:
+Spine is organized into three layers:
 
 1. Core primitives
 2. Framework adapters
@@ -45,14 +45,14 @@ Framework adapters make core primitives ergonomic in a specific framework.
 
 Examples:
 
-- `@eminuckan/mimir-core/react-router`
-- `@eminuckan/mimir-core/react-router/server`
+- `@eminuckan/spine/react-router`
+- `@eminuckan/spine/react-router/server`
 
 Today the React Router adapter is intentionally thin. That is a feature, not a gap: it keeps the core honest and leaves room for future adapters such as Next.js.
 
 ### 3. Application Adapters
 
-Application adapters belong in the consuming app and translate Mimir into product policy.
+Application adapters belong in the consuming app and translate Spine into product policy.
 
 Examples:
 
@@ -140,7 +140,7 @@ Does not own:
 
 ## Composition Pattern
 
-Mimir prefers configuration and composition over inheritance or deep factories.
+Spine prefers configuration and composition over inheritance or deep factories.
 
 The pattern is:
 
@@ -175,7 +175,7 @@ Use this checklist before adding a new primitive.
 
 ## Current Tradeoffs
 
-Mimir is already framework-agnostic at the request/response level, but not every module is maximally abstract yet. Some modules still use environment-driven configuration where factory-based configuration may eventually be better.
+Spine is already framework-agnostic at the request/response level, but not every module is maximally abstract yet. Some modules still use environment-driven configuration where factory-based configuration may eventually be better.
 
 That is acceptable as long as:
 

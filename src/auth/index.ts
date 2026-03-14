@@ -2,7 +2,7 @@
  * Auth Module - Client-side exports
  *
  * Client-side auth types live here.
- * For server-side auth primitives, use `@eminuckan/mimir-core/auth/server`.
+ * For server-side auth primitives, use `@eminuckan/spine/auth/server`.
  */
 
 // Types

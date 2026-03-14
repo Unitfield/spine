@@ -14,11 +14,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Moved tenant, identity, and permission server orchestration out of the dashboard app and into Mimir.
+- Moved tenant, identity, and permission server orchestration out of the dashboard app and into Spine.
 - Expanded tenant primitives to support membership-aware state.
 - Updated package metadata for a fresh public open source release.
 - Rewrote README around the current adapter-based architecture.
-- Renamed remaining package-level branding defaults from legacy product names to Mimir-oriented names where appropriate.
+- Renamed remaining package-level branding defaults from legacy product names to Spine-oriented names where appropriate.
 
 ## [0.1.16] - 2026-02-28
 
@@ -44,4 +44,4 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Initial release of Mimir Core.
+- Initial release of Spine.
