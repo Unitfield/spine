@@ -1,7 +1,7 @@
 /**
  * OAuth2/OIDC Authentication Server Module
- * 
- * Bu modül OAuth2/OIDC authentication flow'unu yönetir:
+ *
+ * Handles:
  * - Login flow (PKCE)
  * - Token exchange
  * - Token refresh
@@ -10,7 +10,6 @@
  */
 
 import * as oauth from 'oauth4webapi';
-import { redirect } from 'react-router';
 
 import {
   createAuthSession,
@@ -25,6 +24,7 @@ import {
 } from './redis-session-storage.server';
 import type { 
   AuthConfig, 
+  AuthClaimMapping,
   UserInfo, 
   SessionData, 
   OAuthState,
@@ -34,6 +34,7 @@ import type {
   AuthError
 } from './types';
 import { logger } from '../logging';
+import { createRedirectResponse } from '../http/response';
 
 // ============================================================================
 // Configuration
@@ -50,8 +51,10 @@ function getEffectiveSsoLogout(config: AuthConfig): boolean {
   
   // Determine by application type
   switch (config.applicationType) {
+    case 'no-landing-page':
     case 'dashboard':
       return true; // Dashboard needs full logout (no landing page)
+    case 'landing-page':
     case 'tenant-app':
       return false; // Tenant app uses app-specific logout
     default:
@@ -70,8 +73,10 @@ function getEffectiveHasLandingPage(config: AuthConfig): boolean {
   
   // Determine by application type
   switch (config.applicationType) {
+    case 'no-landing-page':
     case 'dashboard':
       return false; // Dashboard has no landing page
+    case 'landing-page':
     case 'tenant-app':
       return true; // Tenant app has landing page
     default:
@@ -98,7 +103,11 @@ function createAuthConfig(): AuthConfig {
   // Parse application type from env
   const appTypeEnv = process.env.OIDC_APPLICATION_TYPE?.toLowerCase();
   let applicationType: ApplicationType = 'custom';
-  if (appTypeEnv === 'dashboard') {
+  if (appTypeEnv === 'no-landing-page' || appTypeEnv === 'no_landing_page') {
+    applicationType = 'no-landing-page';
+  } else if (appTypeEnv === 'landing-page' || appTypeEnv === 'landing_page') {
+    applicationType = 'landing-page';
+  } else if (appTypeEnv === 'dashboard') {
     applicationType = 'dashboard';
   } else if (appTypeEnv === 'tenant-app' || appTypeEnv === 'tenant_app') {
     applicationType = 'tenant-app';
@@ -207,6 +216,139 @@ function getClientAuth(): oauth.ClientAuth {
 // Claim Extraction
 // ============================================================================
 
+const DEFAULT_AUTH_CLAIM_MAPPING: Required<AuthClaimMapping> = {
+  subject: ['sub'],
+  name: ['name', 'preferred_username', 'email'],
+  email: ['email'],
+  givenName: ['given_name', 'givenName'],
+  familyName: ['family_name', 'familyName'],
+  picture: ['picture', 'avatar_url'],
+  locale: ['locale'],
+  zoneinfo: ['zoneinfo'],
+  updatedAt: ['updated_at'],
+  tenantIds: ['tenant_ids'],
+  tenantRoles: ['tenant_roles'],
+  permissions: ['app_perms', 'permissions', 'scope'],
+  isOnboarded: ['is_onboarded'],
+};
+
+let authClaimMapping: Required<AuthClaimMapping> = {
+  ...DEFAULT_AUTH_CLAIM_MAPPING,
+};
+
+function normalizeClaimKeys(keys?: string[]): string[] {
+  if (!Array.isArray(keys)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      keys
+        .map((key) => key.trim())
+        .filter((key) => key.length > 0)
+    )
+  );
+}
+
+/**
+ * Configure claim mapping so different providers/backends can project their
+ * own claim names onto the shared auth/session primitives.
+ */
+export function configureAuthClaimMapping(mapping: AuthClaimMapping): void {
+  authClaimMapping = {
+    subject: mapping.subject !== undefined ? normalizeClaimKeys(mapping.subject) : DEFAULT_AUTH_CLAIM_MAPPING.subject,
+    name: mapping.name !== undefined ? normalizeClaimKeys(mapping.name) : DEFAULT_AUTH_CLAIM_MAPPING.name,
+    email: mapping.email !== undefined ? normalizeClaimKeys(mapping.email) : DEFAULT_AUTH_CLAIM_MAPPING.email,
+    givenName: mapping.givenName !== undefined ? normalizeClaimKeys(mapping.givenName) : DEFAULT_AUTH_CLAIM_MAPPING.givenName,
+    familyName: mapping.familyName !== undefined ? normalizeClaimKeys(mapping.familyName) : DEFAULT_AUTH_CLAIM_MAPPING.familyName,
+    picture: mapping.picture !== undefined ? normalizeClaimKeys(mapping.picture) : DEFAULT_AUTH_CLAIM_MAPPING.picture,
+    locale: mapping.locale !== undefined ? normalizeClaimKeys(mapping.locale) : DEFAULT_AUTH_CLAIM_MAPPING.locale,
+    zoneinfo: mapping.zoneinfo !== undefined ? normalizeClaimKeys(mapping.zoneinfo) : DEFAULT_AUTH_CLAIM_MAPPING.zoneinfo,
+    updatedAt: mapping.updatedAt !== undefined ? normalizeClaimKeys(mapping.updatedAt) : DEFAULT_AUTH_CLAIM_MAPPING.updatedAt,
+    tenantIds: mapping.tenantIds !== undefined ? normalizeClaimKeys(mapping.tenantIds) : DEFAULT_AUTH_CLAIM_MAPPING.tenantIds,
+    tenantRoles: mapping.tenantRoles !== undefined ? normalizeClaimKeys(mapping.tenantRoles) : DEFAULT_AUTH_CLAIM_MAPPING.tenantRoles,
+    permissions: mapping.permissions !== undefined ? normalizeClaimKeys(mapping.permissions) : DEFAULT_AUTH_CLAIM_MAPPING.permissions,
+    isOnboarded: mapping.isOnboarded !== undefined ? normalizeClaimKeys(mapping.isOnboarded) : DEFAULT_AUTH_CLAIM_MAPPING.isOnboarded,
+  };
+}
+
+/**
+ * Reset claim mapping to the built-in defaults.
+ */
+export function resetAuthClaimMapping(): void {
+  authClaimMapping = {
+    ...DEFAULT_AUTH_CLAIM_MAPPING,
+  };
+}
+
+function getConfiguredAuthClaimMapping(): Required<AuthClaimMapping> {
+  return authClaimMapping;
+}
+
+function getFirstClaimValue(
+  claims: Record<string, unknown>,
+  claimKeys: string[]
+): { key?: string; value?: unknown } {
+  for (const claimKey of claimKeys) {
+    if (claimKey in claims) {
+      return {
+        key: claimKey,
+        value: claims[claimKey],
+      };
+    }
+  }
+
+  return {};
+}
+
+function getStringClaim(claims: Record<string, unknown>, claimKeys: string[]): string | undefined {
+  const { value } = getFirstClaimValue(claims, claimKeys);
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return `${value}`;
+  }
+
+  return undefined;
+}
+
+function getNumberClaim(claims: Record<string, unknown>, claimKeys: string[]): number | undefined {
+  const { value } = getFirstClaimValue(claims, claimKeys);
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function getBooleanClaim(
+  claims: Record<string, unknown>,
+  claimKeys: string[],
+  defaultValue = false
+): boolean {
+  const { value } = getFirstClaimValue(claims, claimKeys);
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true';
+  }
+
+  return defaultValue;
+}
+
 /**
  * Parse JSON safely
  */
@@ -256,6 +398,17 @@ function toStringArray(value: unknown): string[] {
   return [];
 }
 
+function toScopeArray(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return value
+      .trim()
+      .split(/\s+/)
+      .filter((item) => item.length > 0);
+  }
+
+  return toStringArray(value);
+}
+
 /**
  * Extract user info from ID token claims
  */
@@ -266,10 +419,12 @@ export function extractUserInfo(claims: Record<string, unknown>): {
   tenantRoles: Record<string, string[]>;
   permissions: string[];
 } {
-  // Extract tenant_ids
+  const claimMapping = getConfiguredAuthClaimMapping();
+
+  // Extract tenant IDs
   let tenants: string[] = [];
-  if ('tenant_ids' in claims) {
-    const rawTenantIds = claims['tenant_ids'];
+  const { value: rawTenantIds } = getFirstClaimValue(claims, claimMapping.tenantIds);
+  if (rawTenantIds !== undefined) {
     if (typeof rawTenantIds === 'string' && rawTenantIds.trim().startsWith('[')) {
       const parsed = parseJson(rawTenantIds.trim());
       if (Array.isArray(parsed)) {
@@ -282,10 +437,10 @@ export function extractUserInfo(claims: Record<string, unknown>): {
     }
   }
 
-  // Extract tenant_roles
+  // Extract tenant roles
   const tenantRoles: Record<string, string[]> = {};
-  if ('tenant_roles' in claims) {
-    const rawRoles = claims['tenant_roles'];
+  const { value: rawRoles } = getFirstClaimValue(claims, claimMapping.tenantRoles);
+  if (rawRoles !== undefined) {
     let parsedRoles: unknown = rawRoles;
 
     if (typeof rawRoles === 'string' && rawRoles.trim().startsWith('{')) {
@@ -303,10 +458,14 @@ export function extractUserInfo(claims: Record<string, unknown>): {
   }
 
   // Extract permissions
-  const permissions = 'app_perms' in claims ? toStringArray(claims['app_perms']) : [];
+  const permissionClaim = getFirstClaimValue(claims, claimMapping.permissions);
+  const permissions =
+    permissionClaim.key === 'scope'
+      ? toScopeArray(permissionClaim.value)
+      : toStringArray(permissionClaim.value);
 
   // Extract onboarding status
-  const isOnboarded = claims.is_onboarded === true || claims.is_onboarded === 'true';
+  const isOnboarded = getBooleanClaim(claims, claimMapping.isOnboarded);
 
   return { tenants, isOnboarded, tenantRoles, permissions };
 }
@@ -322,16 +481,17 @@ async function createSessionData(
   tokenResult: oauth.TokenEndpointResponse,
   claims: Record<string, unknown>
 ): Promise<Partial<SessionData>> {
+  const claimMapping = getConfiguredAuthClaimMapping();
   const baseUser: UserInfo = {
-    sub: (claims.sub as string) || 'unknown',
-    name: (claims.name as string) || (claims.email as string) || 'User',
-    email: (claims.email as string) || undefined,
-    givenName: (claims.given_name as string) || (claims.givenName as string),
-    familyName: (claims.family_name as string) || (claims.familyName as string),
-    picture: claims.picture as string,
-    locale: claims.locale as string,
-    zoneinfo: claims.zoneinfo as string,
-    updated_at: claims.updated_at as number,
+    sub: getStringClaim(claims, claimMapping.subject) || 'unknown',
+    name: getStringClaim(claims, claimMapping.name) || getStringClaim(claims, claimMapping.email) || 'User',
+    email: getStringClaim(claims, claimMapping.email),
+    givenName: getStringClaim(claims, claimMapping.givenName),
+    familyName: getStringClaim(claims, claimMapping.familyName),
+    picture: getStringClaim(claims, claimMapping.picture),
+    locale: getStringClaim(claims, claimMapping.locale),
+    zoneinfo: getStringClaim(claims, claimMapping.zoneinfo),
+    updated_at: getNumberClaim(claims, claimMapping.updatedAt),
   };
 
   const expiresAt = tokenResult.expires_in
@@ -451,7 +611,7 @@ export async function login(
       // Use redirectUri to get correct base URL with port
       const redirectUri = new URL(config.redirectUri);
       const baseUrl = redirectUri.origin;
-      return redirect(baseUrl, { headers });
+      return createRedirectResponse(baseUrl, { headers });
     }
 
     const { authorizationServer, client } = await getOAuthConfig();
@@ -510,7 +670,7 @@ export async function login(
     });
 
     logger.info('OAuth authorization flow initiated', { state, stateId, prompt: options.prompt });
-    return redirect(authorizationUrl.toString(), { headers });
+    return createRedirectResponse(authorizationUrl.toString(), { headers });
   } catch (error) {
     logger.error('Failed to initiate OAuth login', error instanceof Error ? error : undefined);
     throw new Error('Login failed');
@@ -590,7 +750,7 @@ export async function handleCallback(request: Request): Promise<Response> {
         });
         // Redirect to /auth/login so user immediately sees the access denied page
         // instead of landing page (which doesn't show the error)
-        return redirect(`${baseUrl}/auth/login`, { headers });
+        return createRedirectResponse(`${baseUrl}/auth/login`, { headers });
       }
       
       // Handle login_required - session expired or user not logged in
@@ -600,7 +760,7 @@ export async function handleCallback(request: Request): Promise<Response> {
         // Use redirectUri to get correct base URL with port
         const redirectUri = new URL(config.redirectUri);
         const baseUrl = redirectUri.origin;
-        return redirect(baseUrl, { headers });
+        return createRedirectResponse(baseUrl, { headers });
       }
       
       // Handle other errors
@@ -618,7 +778,7 @@ export async function handleCallback(request: Request): Promise<Response> {
       // Use redirectUri to get correct base URL with port
       const redirectUri = new URL(config.redirectUri);
       const baseUrl = redirectUri.origin;
-      return redirect(baseUrl, { headers });
+      return createRedirectResponse(baseUrl, { headers });
     }
 
     // Validate required parameters
@@ -728,7 +888,7 @@ export async function handleCallback(request: Request): Promise<Response> {
 
     // Redirect to return URL or default location
     const redirectUrl = oauthState.returnUrl || '/';
-    return redirect(redirectUrl, { headers });
+    return createRedirectResponse(redirectUrl, { headers });
   } catch (error) {
     logger.error('OAuth callback failed', error instanceof Error ? error : undefined);
 
@@ -821,7 +981,7 @@ export async function logout(request: Request): Promise<Response> {
             endSessionUrl.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
           }
           
-          return redirect(endSessionUrl.toString(), { headers });
+          return createRedirectResponse(endSessionUrl.toString(), { headers });
         }
       } catch {
         // Ignore OAuth logout errors
@@ -836,11 +996,11 @@ export async function logout(request: Request): Promise<Response> {
       : `${baseUrl}${registeredPath}`;
 
     logger.info('Logout completed', { redirectUrl: finalRedirectUrl });
-    return redirect(finalRedirectUrl, { headers });
+    return createRedirectResponse(finalRedirectUrl, { headers });
   } catch (error) {
     logger.error('Logout failed', error instanceof Error ? error : undefined);
     const headers = await destroyAuthSession(request);
-    return redirect('/', { headers });
+    return createRedirectResponse('/', { headers });
   }
 }
 

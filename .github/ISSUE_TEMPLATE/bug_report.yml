@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible defect in Mimir Core
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include a minimal reproduction when possible.
+  - type: input
+    id: version
+    attributes:
+      label: Mimir version
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      placeholder: Describe the bug clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: List the steps needed to reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Node version, package manager, framework adapter, runtime, etc.

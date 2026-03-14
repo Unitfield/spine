@@ -4,17 +4,43 @@
  * Cookie-based tenant storage.
  */
 
-const TENANT_COOKIE_NAME = '__active-org';
-const TENANT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+export type TenantCookieSameSite = 'Strict' | 'Lax' | 'None';
+
+export interface TenantCookieConfig {
+  name?: string;
+  maxAge?: number;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: TenantCookieSameSite;
+}
+
+const DEFAULT_TENANT_COOKIE_CONFIG: Required<TenantCookieConfig> = {
+  name: '__active-org',
+  maxAge: 60 * 60 * 24 * 365,
+  path: '/',
+  secure: process.env.NODE_ENV === 'production',
+  httpOnly: false,
+  sameSite: 'Lax',
+};
+
+let tenantCookieConfig: Required<TenantCookieConfig> = {
+  ...DEFAULT_TENANT_COOKIE_CONFIG,
+};
+
+function getTenantCookieConfig(): Required<TenantCookieConfig> {
+  return tenantCookieConfig;
+}
 
 /**
  * Get active tenant from cookie
  */
 export async function getActiveTenant(request: Request): Promise<string | null> {
+  const config = getTenantCookieConfig();
   const cookies = request.headers.get('Cookie');
   if (!cookies) return null;
 
-  const match = cookies.match(new RegExp(`${TENANT_COOKIE_NAME}=([^;]+)`));
+  const match = cookies.match(new RegExp(`${config.name}=([^;]+)`));
   if (!match) return null;
 
   return decodeURIComponent(match[1]);
@@ -24,22 +50,37 @@ export async function getActiveTenant(request: Request): Promise<string | null> 
  * Set active tenant cookie value
  */
 export async function setActiveTenant(tenantId: string): Promise<string> {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  return `${TENANT_COOKIE_NAME}=${encodeURIComponent(tenantId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TENANT_COOKIE_MAX_AGE}${secure}`;
+  const config = getTenantCookieConfig();
+  const secure = config.secure ? '; Secure' : '';
+  const httpOnly = config.httpOnly ? '; HttpOnly' : '';
+  return `${config.name}=${encodeURIComponent(tenantId)}; Path=${config.path}${httpOnly}; SameSite=${config.sameSite}; Max-Age=${config.maxAge}${secure}`;
 }
 
 /**
  * Clear active tenant cookie value
  */
 export async function clearActiveTenant(): Promise<string> {
-  return `${TENANT_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  const config = getTenantCookieConfig();
+  const secure = config.secure ? '; Secure' : '';
+  const httpOnly = config.httpOnly ? '; HttpOnly' : '';
+  return `${config.name}=; Path=${config.path}${httpOnly}; SameSite=${config.sameSite}; Max-Age=0${secure}`;
 }
 
 /**
  * Configure tenant cookie name
  */
-export function configureTenantCookie(name: string): void {
-  // Note: This would require making TENANT_COOKIE_NAME mutable
-  // For now, this is a no-op placeholder
-  console.log('Tenant cookie name configuration:', name);
+export function configureTenantCookie(config: TenantCookieConfig): void {
+  tenantCookieConfig = {
+    ...tenantCookieConfig,
+    ...config,
+  };
+}
+
+/**
+ * Reset tenant cookie config back to defaults.
+ */
+export function resetTenantCookieConfig(): void {
+  tenantCookieConfig = {
+    ...DEFAULT_TENANT_COOKIE_CONFIG,
+  };
 }

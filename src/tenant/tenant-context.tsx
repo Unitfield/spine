@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useTenantStore } from './tenant-store';
-import type { OrganizationData, TenantContextType } from './types';
+import type { OrganizationData, TenantContextType, TenantMembership } from './types';
 
 const TenantContext = createContext<TenantContextType | null>(null);
 
@@ -14,6 +14,7 @@ interface TenantProviderProps {
   children: ReactNode;
   initialTenant?: string | null;
   initialTenants?: string[];
+  initialMemberships?: TenantMembership[];
   onTenantChange?: () => void;
 }
 
@@ -21,19 +22,25 @@ export function TenantProvider({
   children,
   initialTenant = null,
   initialTenants = [],
+  initialMemberships = [],
   onTenantChange,
 }: TenantProviderProps) {
   const currentTenant = useTenantStore((state) => state.currentTenant);
   const availableTenants = useTenantStore((state) => state.availableTenants);
+  const memberships = useTenantStore((state) => state.memberships);
   const organizations = useTenantStore((state) => state.organizations);
   const isLoading = useTenantStore((state) => state.isLoading || state.isSwitching);
   const currentOrganization = useTenantStore((state) => state.getCurrentOrganization());
+  const currentMembership = useTenantStore((state) => state.getCurrentMembership());
 
   const setCurrentTenant = useTenantStore((state) => state.setCurrentTenant);
   const setAvailableTenants = useTenantStore((state) => state.setAvailableTenants);
+  const setMemberships = useTenantStore((state) => state.setMemberships);
   const switchTenantAction = useTenantStore((state) => state.switchTenant);
   const fetchOrganization = useTenantStore((state) => state.fetchOrganization);
   const getOrganization = useTenantStore((state) => state.getOrganization);
+  const getMembership = useTenantStore((state) => state.getMembership);
+  const getTenantName = useTenantStore((state) => state.getTenantName);
 
   // Initialize store with initial values
   useEffect(() => {
@@ -43,7 +50,17 @@ export function TenantProvider({
     if (initialTenants.length > 0) {
       setAvailableTenants(initialTenants);
     }
-  }, [initialTenant, initialTenants.join(','), setCurrentTenant, setAvailableTenants]);
+    if (initialMemberships.length > 0) {
+      setMemberships(initialMemberships);
+    }
+  }, [
+    initialTenant,
+    initialTenants.join(','),
+    initialMemberships.map((membership) => membership.tenantId).join(','),
+    setCurrentTenant,
+    setAvailableTenants,
+    setMemberships,
+  ]);
 
   // Read tenant from cookie (client-side)
   useEffect(() => {
@@ -100,13 +117,17 @@ export function TenantProvider({
   const value: TenantContextType = {
     currentTenant,
     availableTenants,
+    memberships,
     currentOrganization,
+    currentMembership,
     organizations,
     isLoading,
     switchTenant,
     refreshTenants,
     refreshOrganization,
     getOrganization,
+    getMembership,
+    getTenantName,
   };
 
   return (
@@ -151,4 +172,17 @@ export function useTenantSwitcher() {
 export function useCurrentOrganization(): OrganizationData | null {
   const { currentOrganization } = useTenant();
   return currentOrganization;
+}
+
+/**
+ * Hook for organization operations
+ */
+export function useOrganization() {
+  const { currentOrganization, refreshOrganization, isLoading } = useTenant();
+
+  return {
+    organization: currentOrganization,
+    refreshOrganization,
+    isLoading,
+  };
 }

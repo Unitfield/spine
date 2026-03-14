@@ -8,6 +8,17 @@ export interface TenantInfo {
   role?: string;
 }
 
+export interface TenantMembership {
+  tenantId: string;
+  tenantName?: string;
+  tenantSlug?: string | null;
+  organizationName?: string;
+  role?: string;
+  roles?: string[];
+  ownerUserId?: string | null;
+  isOwner?: boolean;
+}
+
 export interface OrganizationBranding {
   logoUrl?: string | null;
   themePrimary?: string | null;
@@ -30,11 +41,15 @@ export interface OrganizationData {
 export interface TenantContextType {
   currentTenant: string | null;
   availableTenants: string[];
+  memberships: Map<string, TenantMembership>;
   currentOrganization: OrganizationData | null;
+  currentMembership: TenantMembership | null;
   organizations: Map<string, OrganizationData>;
   isLoading: boolean;
   switchTenant: (tenantId: string) => void;
   refreshTenants: () => void;
   refreshOrganization: () => void;
   getOrganization: (tenantId: string) => OrganizationData | null;
+  getMembership: (tenantId: string) => TenantMembership | null;
+  getTenantName: (tenantId: string) => string;
 }

@@ -5,6 +5,10 @@
  * All fields are optional to support different backend implementations.
  */
 
+import type { TenantMembership } from '../tenant/types';
+
+export type { TenantMembership } from '../tenant/types';
+
 /**
  * Address data for user profile
  */
@@ -20,28 +24,6 @@ export interface AddressData {
   isPrimary?: boolean;
   attention?: string | null;
   region?: string | null;
-}
-
-/**
- * Tenant/Organization membership information
- */
-export interface TenantMembership {
-  /** Unique tenant identifier */
-  tenantId: string;
-  /** Display name of the tenant/organization */
-  tenantName?: string;
-  /** URL-friendly slug for the tenant */
-  tenantSlug?: string | null;
-  /** @deprecated Use tenantName instead */
-  organizationName?: string;
-  /** User's role in this tenant (single role) */
-  role?: string;
-  /** User's roles in this tenant (multiple roles) */
-  roles?: string[];
-  /** Owner user ID if this is an owned tenant */
-  ownerUserId?: string | null;
-  /** Whether current user is the owner of this tenant */
-  isOwner?: boolean;
 }
 
 /**

@@ -4,6 +4,8 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     server: 'src/server.ts',
+    'react-router/index': 'src/react-router/index.ts',
+    'react-router/server': 'src/react-router/server.ts',
     'auth/index': 'src/auth/index.ts',
     'auth/server': 'src/auth/server.ts',
     'permissions/index': 'src/permissions/index.ts',
@@ -24,7 +26,6 @@ export default defineConfig({
   external: [
     'react',
     'react-dom',
-    'react-router',
     '@tanstack/react-query',
   ],
   // Tree-shaking

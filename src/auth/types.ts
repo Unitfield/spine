@@ -6,7 +6,12 @@
  * Application Type
  * Determines logout behavior and error handling
  */
-export type ApplicationType = 'dashboard' | 'tenant-app' | 'custom';
+export type ApplicationType =
+  | 'no-landing-page'
+  | 'landing-page'
+  | 'dashboard'
+  | 'tenant-app'
+  | 'custom';
 
 /**
  * OAuth Configuration
@@ -21,8 +26,10 @@ export interface AuthConfig {
   
   /**
    * Application type - determines logout behavior
-   * - 'dashboard': No landing page, uses sso_logout=true for full logout
-   * - 'tenant-app': Has landing page, app-specific logout (keeps identity cookie)
+   * - 'no-landing-page': No landing page, defaults to full SSO logout
+   * - 'landing-page': Has a landing page, defaults to app-specific logout
+   * - 'dashboard': Legacy alias for 'no-landing-page'
+   * - 'tenant-app': Legacy alias for 'landing-page'
    * - 'custom': Use explicit ssoLogout setting
    * @default 'custom'
    */
@@ -34,8 +41,10 @@ export interface AuthConfig {
    * - false: App-specific logout - keeps identity cookie, revokes only this app's tokens
    * 
    * If not set, determined by applicationType:
-   * - 'dashboard': true (full logout)
-   * - 'tenant-app': false (app-specific)
+   * - 'no-landing-page': true (full logout)
+   * - 'landing-page': false (app-specific)
+   * - 'dashboard': true (legacy alias)
+   * - 'tenant-app': false (legacy alias)
    * - 'custom': false (default)
    */
   ssoLogout?: boolean;
@@ -46,11 +55,33 @@ export interface AuthConfig {
    * - false: No landing page - Must handle OAuth errors specially to avoid loops
    * 
    * If not set, determined by applicationType:
-   * - 'dashboard': false (no landing page)
-   * - 'tenant-app': true (has landing page)
+   * - 'no-landing-page': false
+   * - 'landing-page': true
+   * - 'dashboard': false (legacy alias)
+   * - 'tenant-app': true (legacy alias)
    * - 'custom': true (default)
    */
   hasLandingPage?: boolean;
+}
+
+/**
+ * Configurable claim mapping for adapting auth/session extraction
+ * to different identity providers and backend conventions.
+ */
+export interface AuthClaimMapping {
+  subject?: string[];
+  name?: string[];
+  email?: string[];
+  givenName?: string[];
+  familyName?: string[];
+  picture?: string[];
+  locale?: string[];
+  zoneinfo?: string[];
+  updatedAt?: string[];
+  tenantIds?: string[];
+  tenantRoles?: string[];
+  permissions?: string[];
+  isOnboarded?: string[];
 }
 
 /**

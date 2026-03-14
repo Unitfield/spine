@@ -2,7 +2,7 @@
  * Query Client Types
  */
 
-import type { QueryClient, DefaultOptions, QueryKey } from '@tanstack/react-query';
+import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
 /**
  * Logger interface for query client

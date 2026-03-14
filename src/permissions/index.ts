@@ -5,7 +5,7 @@
  * 
  * @example
  * ```tsx
- * import { usePermission, ProtectedButton } from '@propmate/core/permissions';
+ * import { usePermission, ProtectedButton } from '@eminuckan/mimir-core/permissions';
  * 
  * function MyComponent() {
  *   const canEdit = usePermission('Identity.Users.Edit');

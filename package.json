@@ -1,11 +1,13 @@
 {
   "name": "@eminuckan/mimir-core",
-  "version": "0.1.16",
-  "description": "Mimir Core - Multi-tenant SaaS infrastructure for React Router applications",
+  "version": "0.2.0",
+  "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "packageManager": "pnpm@9.15.9",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -14,6 +16,14 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
+    },
+    "./react-router": {
+      "types": "./dist/react-router/index.d.ts",
+      "import": "./dist/react-router/index.js"
+    },
+    "./react-router/server": {
+      "types": "./dist/react-router/server.d.ts",
+      "import": "./dist/react-router/server.js"
     },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
@@ -66,6 +76,7 @@
   },
   "files": [
     "dist",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -78,26 +89,28 @@
     "prepublishOnly": "pnpm run build"
   },
   "peerDependencies": {
-    "react": ">=18.0.0",
-    "react-router": ">=7.0.0",
-    "@tanstack/react-query": ">=5.0.0"
+    "@tanstack/react-query": ">=5.0.0",
+    "react": ">=18.0.0"
   },
   "dependencies": {
-    "oauth4webapi": "^3.3.0",
-    "ioredis": "^5.4.1",
-    "zustand": "^5.0.2",
     "@microsoft/signalr": "^9.0.0",
     "axios": "^1.7.0",
     "clsx": "^2.1.1",
-    "tailwind-merge": "^2.5.0"
+    "ioredis": "^5.4.1",
+    "oauth4webapi": "^3.3.0",
+    "tailwind-merge": "^2.5.0",
+    "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.7.0",
-    "tsdown": "^0.9.0",
+    "eslint": "^9.0.0",
+    "globals": "^17.4.0",
     "rimraf": "^6.0.0",
-    "eslint": "^9.0.0"
+    "tsdown": "^0.9.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.57.0"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -105,6 +118,24 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "api-client",
+    "auth",
+    "framework-agnostic",
+    "multi-tenant",
+    "oauth",
+    "oidc",
+    "react-router",
+    "saas",
+    "signalr",
+    "tanstack-query",
+    "typescript",
+    "zustand"
+  ],
+  "homepage": "https://github.com/eminuckan/mimir-core#readme",
+  "bugs": {
+    "url": "https://github.com/eminuckan/mimir-core/issues"
   },
   "repository": {
     "type": "git",

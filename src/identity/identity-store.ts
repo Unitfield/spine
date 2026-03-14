@@ -39,28 +39,87 @@ interface IdentityState {
   reset: () => void;
 }
 
-/**
- * Context refresh endpoint (configurable)
- */
-let contextEndpoint = '/api/identity/context';
-let permissionsEndpoint = '/api/identity/permissions';
+export interface IdentityUnauthorizedDetails {
+  reason: 'current-user-missing' | 'unauthorized';
+  logoutPath: string;
+  response?: Response;
+}
+
+export interface IdentityStoreConfig {
+  contextEndpoint?: string;
+  permissionsEndpoint?: string;
+  logoutPath?: string;
+  fetcher?: typeof fetch;
+  onUnauthorized?: (details: IdentityUnauthorizedDetails) => void;
+}
+
+const DEFAULT_IDENTITY_STORE_CONFIG: Required<
+  Pick<IdentityStoreConfig, 'contextEndpoint' | 'permissionsEndpoint' | 'logoutPath' | 'fetcher'>
+> = {
+  contextEndpoint: '/api/identity/context',
+  permissionsEndpoint: '/api/identity/permissions',
+  logoutPath: '/auth/logout',
+  fetcher: (input, init) => fetch(input, init),
+};
+
+let identityStoreConfig: IdentityStoreConfig = {
+  ...DEFAULT_IDENTITY_STORE_CONFIG,
+};
+
+function getIdentityStoreConfig(): IdentityStoreConfig & typeof DEFAULT_IDENTITY_STORE_CONFIG {
+  return {
+    ...DEFAULT_IDENTITY_STORE_CONFIG,
+    ...identityStoreConfig,
+  };
+}
+
+function handleUnauthorized(details: Omit<IdentityUnauthorizedDetails, 'logoutPath'>): void {
+  const config = getIdentityStoreConfig();
+  const unauthorizedDetails: IdentityUnauthorizedDetails = {
+    ...details,
+    logoutPath: config.logoutPath,
+  };
+
+  if (config.onUnauthorized) {
+    config.onUnauthorized(unauthorizedDetails);
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.location.href = config.logoutPath;
+  }
+}
 
 /**
- * Configure identity store endpoints
+ * Configure the identity store for different app/back-end conventions.
+ */
+export function configureIdentityStore(config: IdentityStoreConfig): void {
+  identityStoreConfig = {
+    ...identityStoreConfig,
+    ...config,
+  };
+}
+
+/**
+ * Reset identity store configuration to the built-in defaults.
+ */
+export function resetIdentityStoreConfig(): void {
+  identityStoreConfig = {
+    ...DEFAULT_IDENTITY_STORE_CONFIG,
+  };
+}
+
+/**
+ * Backward-compatible endpoint-only configuration helper.
  */
 export function configureIdentityEndpoints(config: {
   contextEndpoint?: string;
   permissionsEndpoint?: string;
-}) {
-  if (config.contextEndpoint) {
-    contextEndpoint = config.contextEndpoint;
-  }
-  if (config.permissionsEndpoint) {
-    permissionsEndpoint = config.permissionsEndpoint;
-  }
+}): void {
+  configureIdentityStore(config);
 }
 
-export const useIdentityStore = create<IdentityState>((set, get) => ({
+export const useIdentityStore = create<IdentityState>((set) => ({
   context: initialContext,
 
   setContext: (newContext) => {
@@ -76,11 +135,13 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
 
   refreshContext: async () => {
     try {
+      const config = getIdentityStoreConfig();
+
       set((state) => ({
         context: { ...state.context, isLoading: true },
       }));
 
-      const response = await fetch(`${contextEndpoint}?refresh=true`, {
+      const response = await config.fetcher(`${config.contextEndpoint}?refresh=true`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -101,13 +162,23 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
         const errorData = await response.json().catch(() => ({}));
         if (errorData.code === 'CurrentUserMissing' || errorData.title === 'CurrentUserMissing') {
           console.error('CurrentUserMissing error - session is invalid, redirecting to logout');
-          window.location.href = '/auth/logout';
+          handleUnauthorized({
+            reason: 'current-user-missing',
+            response,
+          });
           return;
         }
         console.error('Failed to refresh identity context:', response.status);
         set((state) => ({
           context: { ...state.context, isLoading: false },
         }));
+      } else if (response.status === 401) {
+        console.error('Identity context refresh returned 401, redirecting to logout');
+        handleUnauthorized({
+          reason: 'unauthorized',
+          response,
+        });
+        return;
       } else {
         console.error('Failed to refresh identity context:', response.status);
         set((state) => ({
@@ -124,9 +195,11 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
 
   refreshPermissions: async () => {
     try {
+      const config = getIdentityStoreConfig();
+
       console.log('Refreshing permissions...');
 
-      const response = await fetch(permissionsEndpoint, {
+      const response = await config.fetcher(config.permissionsEndpoint, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -147,6 +220,12 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
 
         console.log('Permissions refreshed:', {
           count: permissions.length,
+        });
+      } else if (response.status === 401) {
+        console.error('Permissions refresh returned 401, redirecting to logout');
+        handleUnauthorized({
+          reason: 'unauthorized',
+          response,
         });
       } else {
         console.error('Failed to refresh permissions:', response.status);

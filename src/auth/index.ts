@@ -1,8 +1,8 @@
 /**
  * Auth Module - Client-side exports
- * 
- * Bu modül client-side'da kullanılacak auth utilities içerir.
- * Server-side auth için '@propmate/core/auth/server' kullanın.
+ *
+ * Client-side auth types live here.
+ * For server-side auth primitives, use `@eminuckan/mimir-core/auth/server`.
  */
 
 // Types

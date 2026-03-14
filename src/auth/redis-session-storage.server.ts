@@ -1,13 +1,14 @@
 /**
  * Redis Session Storage Server Module
- * 
+ *
  * Redis-backed session storage for authentication.
- * Provides secure session management with automatic expiration.
+ * Provides secure session management with automatic expiration,
+ * without depending on a framework-specific session implementation.
  */
 
-import { createSessionStorage } from 'react-router';
 import Redis from 'ioredis';
-import type { SessionData, SessionFlashData, OAuthState } from './types';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import type { SessionData, OAuthState } from './types';
 import { logger } from '../logging';
 
 // ============================================================================
@@ -35,7 +36,6 @@ function getRedis(): Redis {
 // Redis Key Patterns
 // ============================================================================
 
-// Prefix for Redis keys - allows multiple apps to share the same Redis instance
 const KEY_PREFIX = process.env.REDIS_KEY_PREFIX || '';
 
 const REDIS_KEYS = {
@@ -43,171 +43,255 @@ const REDIS_KEYS = {
   session: (sessionId: string) => `${KEY_PREFIX}session:${sessionId}`,
 };
 
-// TTL constants
-const OAUTH_STATE_TTL = 10 * 60; // 10 minutes in seconds
-const SESSION_TTL = 60 * 60 * 24 * 7; // 7 days in seconds
+const OAUTH_STATE_TTL = 10 * 60;
+const SESSION_TTL = 60 * 60 * 24 * 7;
 
-// Session cookie name - MUST be unique per application to prevent session conflicts
-// When multiple apps run on the same domain (e.g., localhost), they will overwrite each other's
-// session cookies if they use the same cookie name
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || '__session_id';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'default-secret-change-in-production';
+const SESSION_COOKIE_SECURE = process.env.NODE_ENV === 'production';
+const SESSION_COOKIE_PATH = '/';
+const SESSION_COOKIE_SAME_SITE = 'Lax';
 
-// Auth error cookie prefix - derived from session cookie name to prevent conflicts
-// between multiple apps on the same domain
 export const AUTH_ERROR_COOKIE_PREFIX = SESSION_COOKIE_NAME.replace('_session', '').replace('__', '');
 
-// ============================================================================
-// Session Storage
-// ============================================================================
+type SessionCookieOptions = {
+  maxAge: number;
+};
 
-function createRedisSessionStorage() {
-  return createSessionStorage<SessionData, SessionFlashData>({
-    cookie: {
-      name: SESSION_COOKIE_NAME,
-      httpOnly: true,
-      maxAge: SESSION_TTL,
-      path: '/',
-      sameSite: 'lax',
-      secrets: [process.env.SESSION_SECRET || 'default-secret-change-in-production'],
-      secure: process.env.NODE_ENV === 'production',
-    },
-    async createData(data) {
-      const sessionId = crypto.randomUUID();
-      const sessionData = JSON.stringify(data);
-      await getRedis().setex(REDIS_KEYS.session(sessionId), SESSION_TTL, sessionData);
-      logger.debug('Created Redis session', { sessionId, dataKeys: Object.keys(data) });
-      return sessionId;
-    },
-    async readData(sessionId) {
-      try {
-        const sessionData = await getRedis().get(REDIS_KEYS.session(sessionId));
-        if (!sessionData) {
-          logger.debug('Session not found in Redis', { sessionId });
-          return null;
-        }
-        // Extend TTL on read
-        await getRedis().expire(REDIS_KEYS.session(sessionId), SESSION_TTL);
-        return JSON.parse(sessionData);
-      } catch (error) {
-        logger.error('Failed to read session from Redis', error instanceof Error ? error : undefined);
-        return null;
+function parseCookieHeader(cookieHeader: string | null): Record<string, string> {
+  if (!cookieHeader) {
+    return {};
+  }
+
+  return cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((cookies, part) => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex <= 0) {
+        return cookies;
       }
-    },
-    async updateData(sessionId, data) {
-      try {
-        const sessionData = JSON.stringify(data);
-        await getRedis().setex(REDIS_KEYS.session(sessionId), SESSION_TTL, sessionData);
-        logger.debug('Updated Redis session', { sessionId });
-      } catch (error) {
-        logger.error('Failed to update session in Redis', error instanceof Error ? error : undefined);
-        throw error;
+
+      const name = part.slice(0, separatorIndex).trim();
+      const value = part.slice(separatorIndex + 1).trim();
+      if (!name) {
+        return cookies;
       }
-    },
-    async deleteData(sessionId) {
-      try {
-        await getRedis().del(REDIS_KEYS.session(sessionId));
-        logger.debug('Deleted Redis session', { sessionId });
-      } catch (error) {
-        logger.error('Failed to delete session from Redis', error instanceof Error ? error : undefined);
-      }
-    },
-  });
+
+      cookies[name] = value;
+      return cookies;
+    }, {});
 }
 
-let sessionStorage: ReturnType<typeof createRedisSessionStorage> | null = null;
+function createCookieSignature(value: string, secret: string): string {
+  return createHmac('sha256', secret).update(value).digest('base64url');
+}
 
-function getSessionStorage() {
-  if (!sessionStorage) {
-    sessionStorage = createRedisSessionStorage();
+function safelyCompareValues(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
   }
-  return sessionStorage;
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function signSessionId(sessionId: string): string {
+  const signature = createCookieSignature(sessionId, SESSION_SECRET);
+  return `${sessionId}.${signature}`;
+}
+
+function unsignSessionId(cookieValue: string | undefined): string | null {
+  if (!cookieValue) {
+    return null;
+  }
+
+  let decodedValue: string;
+  try {
+    decodedValue = decodeURIComponent(cookieValue);
+  } catch {
+    return null;
+  }
+
+  const separatorIndex = decodedValue.lastIndexOf('.');
+  if (separatorIndex <= 0 || separatorIndex === decodedValue.length - 1) {
+    return null;
+  }
+
+  const sessionId = decodedValue.slice(0, separatorIndex);
+  const signature = decodedValue.slice(separatorIndex + 1);
+  const expectedSignature = createCookieSignature(sessionId, SESSION_SECRET);
+
+  return safelyCompareValues(signature, expectedSignature) ? sessionId : null;
+}
+
+function serializeSessionCookieValue(sessionId: string, options: SessionCookieOptions): string {
+  const signedValue = encodeURIComponent(signSessionId(sessionId));
+  const segments = [
+    `${SESSION_COOKIE_NAME}=${signedValue}`,
+    `Max-Age=${options.maxAge}`,
+    `Path=${SESSION_COOKIE_PATH}`,
+    `SameSite=${SESSION_COOKIE_SAME_SITE}`,
+    'HttpOnly',
+  ];
+
+  if (SESSION_COOKIE_SECURE) {
+    segments.push('Secure');
+  }
+
+  return segments.join('; ');
+}
+
+function serializeExpiredSessionCookie(): string {
+  const segments = [
+    `${SESSION_COOKIE_NAME}=`,
+    'Max-Age=0',
+    `Path=${SESSION_COOKIE_PATH}`,
+    `SameSite=${SESSION_COOKIE_SAME_SITE}`,
+    'HttpOnly',
+  ];
+
+  if (SESSION_COOKIE_SECURE) {
+    segments.push('Secure');
+  }
+
+  return segments.join('; ');
+}
+
+async function getSessionIdFromRequest(request: Request): Promise<string | null> {
+  const cookies = parseCookieHeader(request.headers.get('Cookie'));
+  return unsignSessionId(cookies[SESSION_COOKIE_NAME]);
+}
+
+async function readSessionData(sessionId: string): Promise<SessionData | null> {
+  try {
+    const sessionData = await getRedis().get(REDIS_KEYS.session(sessionId));
+    if (!sessionData) {
+      logger.debug('Session not found in Redis', { sessionId });
+      return null;
+    }
+
+    await getRedis().expire(REDIS_KEYS.session(sessionId), SESSION_TTL);
+    return JSON.parse(sessionData) as SessionData;
+  } catch (error) {
+    logger.error('Failed to read session from Redis', error instanceof Error ? error : undefined);
+    return null;
+  }
+}
+
+async function writeSessionData(sessionId: string, data: SessionData): Promise<void> {
+  try {
+    const sessionData = JSON.stringify(data);
+    await getRedis().setex(REDIS_KEYS.session(sessionId), SESSION_TTL, sessionData);
+    logger.debug('Updated Redis session', { sessionId });
+  } catch (error) {
+    logger.error('Failed to update session in Redis', error instanceof Error ? error : undefined);
+    throw error;
+  }
+}
+
+async function deleteSessionData(sessionId: string): Promise<void> {
+  try {
+    await getRedis().del(REDIS_KEYS.session(sessionId));
+    logger.debug('Deleted Redis session', { sessionId });
+  } catch (error) {
+    logger.error('Failed to delete session from Redis', error instanceof Error ? error : undefined);
+  }
+}
+
+function mergeSessionData(existingData: SessionData, updates: Partial<SessionData>): SessionData {
+  const nextData = { ...existingData } as Record<string, unknown>;
+
+  Object.entries(updates).forEach(([key, value]) => {
+    if (value === undefined) {
+      delete nextData[key];
+      return;
+    }
+
+    nextData[key] = value;
+  });
+
+  return nextData as SessionData;
 }
 
 // ============================================================================
 // Session Helper Functions
 // ============================================================================
 
-/**
- * Create a new auth session
- */
 export async function createAuthSession(
   request: Request,
   sessionData: Partial<SessionData>
 ): Promise<Headers> {
-  const { getSession, commitSession } = getSessionStorage();
-  const session = await getSession(request.headers.get('Cookie'));
+  const currentSessionId = await getSessionIdFromRequest(request);
+  const currentSessionData = currentSessionId
+    ? (await readSessionData(currentSessionId)) ?? {}
+    : {};
+  const nextSessionId = currentSessionId ?? crypto.randomUUID();
+  const nextSessionData = mergeSessionData(currentSessionData, sessionData);
 
   logger.debug('Creating auth session', { dataKeys: Object.keys(sessionData) });
 
-  Object.entries(sessionData).forEach(([key, value]) => {
-    if (value !== undefined) {
-      session.set(key as keyof SessionData, value);
-    } else {
-      session.unset(key as keyof SessionData);
-    }
-  });
+  await writeSessionData(nextSessionId, nextSessionData);
 
   return new Headers({
-    'Set-Cookie': await commitSession(session),
+    'Set-Cookie': serializeSessionCookieValue(nextSessionId, { maxAge: SESSION_TTL }),
   });
 }
 
-/**
- * Get auth session data
- */
 export async function getAuthSession(request: Request): Promise<SessionData> {
-  const { getSession } = getSessionStorage();
-  const session = await getSession(request.headers.get('Cookie'));
+  const sessionId = await getSessionIdFromRequest(request);
+  if (!sessionId) {
+    return {};
+  }
+
+  const session = await readSessionData(sessionId);
+  if (!session) {
+    return {};
+  }
 
   return {
-    userId: session.get('userId'),
-    accessToken: session.get('accessToken'),
-    refreshToken: session.get('refreshToken'),
-    idToken: session.get('idToken'),
-    expiresAt: session.get('expiresAt'),
-    user: session.get('user'),
-    lastActivity: session.get('lastActivity'),
+    userId: session.userId,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    idToken: session.idToken,
+    expiresAt: session.expiresAt,
+    user: session.user,
+    lastActivity: session.lastActivity,
   };
 }
 
-/**
- * Update auth session
- */
 export async function updateAuthSession(
   request: Request,
   updates: Partial<SessionData>
 ): Promise<Headers> {
-  const { getSession, commitSession } = getSessionStorage();
-  const session = await getSession(request.headers.get('Cookie'));
+  const currentSessionId = await getSessionIdFromRequest(request);
+  const currentSessionData = currentSessionId
+    ? (await readSessionData(currentSessionId)) ?? {}
+    : {};
+  const nextSessionId = currentSessionId ?? crypto.randomUUID();
+  const nextSessionData = mergeSessionData(currentSessionData, updates);
 
-  Object.entries(updates).forEach(([key, value]) => {
-    if (value !== undefined) {
-      session.set(key as keyof SessionData, value);
-    } else {
-      session.unset(key as keyof SessionData);
-    }
-  });
+  await writeSessionData(nextSessionId, nextSessionData);
 
   return new Headers({
-    'Set-Cookie': await commitSession(session),
+    'Set-Cookie': serializeSessionCookieValue(nextSessionId, { maxAge: SESSION_TTL }),
   });
 }
 
-/**
- * Destroy auth session
- */
 export async function destroyAuthSession(request: Request): Promise<Headers> {
-  const { getSession, destroySession } = getSessionStorage();
-  const session = await getSession(request.headers.get('Cookie'));
+  const sessionId = await getSessionIdFromRequest(request);
+  if (sessionId) {
+    await deleteSessionData(sessionId);
+  }
 
   return new Headers({
-    'Set-Cookie': await destroySession(session),
+    'Set-Cookie': serializeExpiredSessionCookie(),
   });
 }
 
-/**
- * Require auth session (throws 401 if not authenticated)
- */
 export async function requireAuthSession(request: Request): Promise<SessionData> {
   const sessionData = await getAuthSession(request);
 
@@ -218,9 +302,6 @@ export async function requireAuthSession(request: Request): Promise<SessionData>
   return sessionData;
 }
 
-/**
- * Check if session is valid
- */
 export async function isSessionValid(request: Request): Promise<boolean> {
   try {
     const sessionData = await getAuthSession(request);
@@ -243,9 +324,6 @@ export async function isSessionValid(request: Request): Promise<boolean> {
 // OAuth State Management
 // ============================================================================
 
-/**
- * Create OAuth state in Redis
- */
 export async function createOAuthState(state: OAuthState): Promise<string> {
   const stateId = crypto.randomUUID();
   const key = REDIS_KEYS.oauthState(stateId);
@@ -257,9 +335,6 @@ export async function createOAuthState(state: OAuthState): Promise<string> {
   return stateId;
 }
 
-/**
- * Get OAuth state from Redis
- */
 export async function getOAuthState(stateId: string): Promise<OAuthState | null> {
   const key = REDIS_KEYS.oauthState(stateId);
   const data = await getRedis().get(key);
@@ -277,18 +352,12 @@ export async function getOAuthState(stateId: string): Promise<OAuthState | null>
   }
 }
 
-/**
- * Delete OAuth state from Redis
- */
 export async function deleteOAuthState(stateId: string): Promise<void> {
   const key = REDIS_KEYS.oauthState(stateId);
   await getRedis().del(key);
   logger.debug('OAuth state deleted', { stateId });
 }
 
-/**
- * Cleanup expired OAuth states
- */
 export async function cleanupExpiredOAuthStates(): Promise<number> {
   const pattern = REDIS_KEYS.oauthState('*');
   const keys = await getRedis().keys(pattern);
@@ -310,9 +379,6 @@ export async function cleanupExpiredOAuthStates(): Promise<number> {
 // Cleanup
 // ============================================================================
 
-/**
- * Close Redis connection (for graceful shutdown)
- */
 export async function closeRedisConnection(): Promise<void> {
   if (redis) {
     await redis.quit();

@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an improvement to Mimir Core
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      placeholder: What repeated pain point are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the API or behavior you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Core vs adapter vs app
+      placeholder: Explain why this belongs in Mimir core, an adapter, or the consuming app.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      placeholder: Examples, related packages, screenshots, or prior art.

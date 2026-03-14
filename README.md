@@ -1,66 +1,336 @@
-# @eminuckan/mimir-core
+# Mimir Core
 
-Core infrastructure package for multi-tenant SaaS applications. Provides authentication, authorization, multi-tenancy, and API client utilities.
+Framework-agnostic SaaS primitives for authentication, identity, permissions, multi-tenancy, API access, realtime events, query configuration, and logging.
 
-> **Mímir** - In Norse mythology, the wise being who guarded the Well of Wisdom. Odin sacrificed his eye to drink from it and gain cosmic knowledge.
+Mimir is designed around one idea: the reusable parts of a SaaS platform should live in a single package, while application policy and framework quirks should stay in thin adapters. Today the package ships a framework-agnostic core plus a React Router adapter surface. Future adapters can follow the same pattern.
+
+## Status
+
+- Core package: `@eminuckan/mimir-core`
+- Current adapter: `@eminuckan/mimir-core/react-router`
+- Server primitives use Web `Request`/`Response` objects, not framework-specific response helpers
+- React Router adapter is intentionally thin today so other adapters can be added without changing the core contract
+
+## Why Mimir
+
+Most internal app infrastructure starts the same way: one product grows an auth layer, a tenant switcher, permission checks, a query client, an API wrapper, and a realtime client. Then a second product appears and copies all of it. Mimir exists to stop that drift.
+
+Mimir aims to be:
+
+- Framework-agnostic at its core
+- Adapter-friendly for framework integration
+- Config-driven for backend conventions
+- Honest about boundaries between reusable primitives and app-specific policy
+- Small enough to understand, flexible enough to extend
+
+## Design Principles
+
+- Core before adapter: framework-specific behavior belongs in dedicated adapter entry points
+- Configure, do not fork: backend claim names, cookie behavior, endpoints, and redirects should be configured first
+- Request/Response first: server modules should work anywhere a standard Web `Request` and `Response` exist
+- App policy stays local: onboarding flows, subscription gates, product-specific redirects, and permission taxonomies should live in the consuming app
+- Open for composition: apps should be able to wrap Mimir primitives instead of rewriting them
+
+## Package Surfaces
+
+| Entry point | Purpose |
+| --- | --- |
+| `@eminuckan/mimir-core` | Client-side primitives and shared types |
+| `@eminuckan/mimir-core/server` | Framework-agnostic server primitives |
+| `@eminuckan/mimir-core/react-router` | React Router client adapter |
+| `@eminuckan/mimir-core/react-router/server` | React Router server adapter |
+| `@eminuckan/mimir-core/auth` | Auth types |
+| `@eminuckan/mimir-core/auth/server` | Auth/session/route protection primitives |
+| `@eminuckan/mimir-core/tenant` | Tenant store, provider, and types |
+| `@eminuckan/mimir-core/tenant/server` | Tenant cookie and server helpers |
+| `@eminuckan/mimir-core/identity` | Identity store/provider/types |
+| `@eminuckan/mimir-core/identity/server` | Identity context cache and server orchestration |
+| `@eminuckan/mimir-core/api-client` | Client-side API types and errors |
+| `@eminuckan/mimir-core/api-client/server` | Server-side API config and Axios helpers |
+| `@eminuckan/mimir-core/permissions` | Client-side permission primitives |
+| `@eminuckan/mimir-core/logging` | Logging primitives |
+| `@eminuckan/mimir-core/query-client` | TanStack Query helpers |
+| `@eminuckan/mimir-core/signalr` | Realtime client helpers |
+
+## What Mimir Includes
+
+- OAuth2/OIDC login, callback handling, logout, and token refresh
+- Redis-backed session and OAuth state storage
+- Server-side route protection primitives
+- Server-side permission route protection configuration
+- Multi-tenant client state and server helpers
+- Identity context cache, fetch orchestration, and client store/provider
+- API client factory and Axios interceptor setup
+- TanStack Query client defaults and cache presets
+- SignalR client helpers
+- Logging primitives
+
+## What Mimir Does Not Include
+
+- Your product's onboarding rules
+- Your product's subscription rules
+- Your product's permission vocabulary
+- Your backend DTOs or generated API clients
+- Your page structure, layouts, or UI system
+
+Those belong in the consuming app or in a product-specific adapter package.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  A["Mimir Core"] --> B["Server Primitives"]
+  A --> C["Client Primitives"]
+  B --> D["Framework Adapter"]
+  C --> D
+  D --> E["Application Adapter Layer"]
+  E --> F["Product UI + Backend APIs"]
+```
+
+The important boundary is between reusable infrastructure and product policy:
+
+- Mimir Core owns generic primitives
+- Framework adapters own framework glue
+- Application adapters own product-specific routing, claims, endpoints, and workflow rules
+
+Detailed architecture notes live in [docs/architecture.md](docs/architecture.md).
 
 ## Installation
 
 ```bash
-# npm (public)
 pnpm add @eminuckan/mimir-core
-
-# local development
-cd mimir-core && pnpm link --global
-cd your-app && pnpm link --global @eminuckan/mimir-core
 ```
 
-## Features
+If you use client-side React features, install peer dependencies too:
 
-- 🔐 **OAuth2/OIDC Authentication** - Complete auth flow with token refresh
-- 🛡️ **Route Protection** - Server-side route guards
-- 👥 **RBAC Permissions** - Fine-grained permission system with Zustand store
-- 🏢 **Multi-Tenancy** - Tenant context management with cookie persistence
-- 🆔 **Identity Context** - User identity with real-time SignalR updates
-- 🔌 **SignalR Client** - Real-time communication
-- 📡 **API Client** - Axios setup with interceptors, retry, and error handling
-- 📊 **Query Client** - TanStack Query configuration with cache presets
-- 📝 **Logging** - Structured logging with levels
+```bash
+pnpm add react @tanstack/react-query
+```
+
+## Environment Variables
+
+The built-in auth/session layer currently reads these environment variables:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `OIDC_AUTHORITY` | Yes | OAuth/OIDC issuer base URL |
+| `OIDC_CLIENT_ID` | Yes | Client identifier |
+| `OIDC_REDIRECT_URI` | Yes | OAuth callback URL |
+| `OIDC_CLIENT_SECRET` | No | Client secret for confidential clients |
+| `OIDC_SCOPE` | No | Requested scope string |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | No | Logout return URL |
+| `OIDC_APPLICATION_TYPE` | No | `no-landing-page`, `landing-page`, or legacy aliases |
+| `OIDC_SSO_LOGOUT` | No | Explicit full-logout override |
+| `OIDC_HAS_LANDING_PAGE` | No | Explicit landing-page behavior override |
+| `REDIS_URL` | No | Redis connection string for sessions and OAuth state |
+| `REDIS_KEY_PREFIX` | No | Prefix for Redis keys |
+| `API_BASE_URL` | No | Default API base URL for `createAPIConfigFactory` |
 
 ## Quick Start
 
-### 1. Client-side Setup (root.tsx)
+### 1. Configure Identity and Tenant Adapters
+
+Mimir's server modules are generic, so your app should provide backend-specific fetchers once.
+
+```ts
+// app/lib/mimir/identity.server.ts
+import {
+  configureIdentityAPIFetcher,
+  configurePermissionFetcher,
+  contextToUserInfo,
+  getIdentityContext,
+} from '@eminuckan/mimir-core/identity/server';
+import { createAPIConfigFactory } from '@eminuckan/mimir-core/api-client/server';
+import { getAccessToken } from '@eminuckan/mimir-core/react-router/server';
+import { getCurrentTenant } from '@eminuckan/mimir-core/tenant/server';
+import { Configuration, IdentityApi } from '~/lib/api-clients/api';
+
+const { createAPIConfig } = createAPIConfigFactory(getAccessToken, getCurrentTenant);
+
+configureIdentityAPIFetcher(async (request) => {
+  const config = await createAPIConfig(request, {
+    requireTenant: false,
+    includeAuth: true,
+  });
+
+  const api = new IdentityApi(
+    new Configuration({
+      basePath: config.basePath,
+      accessToken: config.accessToken,
+      baseOptions: { headers: config.headers },
+    })
+  );
+
+  const response = await api.identityGetMyContext();
+
+  return {
+    ...response.data,
+    contextVersion: Date.now(),
+    hasSubscription: Boolean(
+      response.data.onboarding?.subscription?.exists &&
+      ['active', 'trialing'].includes(response.data.onboarding?.subscription?.status || '')
+    ),
+  };
+});
+
+configurePermissionFetcher(async (request, tenantId) => {
+  const config = await createAPIConfig(request, { requireTenant: false });
+  const api = new IdentityApi(
+    new Configuration({
+      basePath: config.basePath,
+      accessToken: config.accessToken,
+      baseOptions: { headers: config.headers },
+    })
+  );
+
+  const response = await api.identityGetMyPermissions(tenantId);
+  return response.data.permissions || [];
+});
+
+export { contextToUserInfo, getIdentityContext };
+```
+
+```ts
+// app/lib/mimir/tenant.server.ts
+import {
+  configureIdentityContextFetcher,
+  configureTenantCookie,
+  getAvailableTenants,
+  getCurrentTenant,
+  initializeTenant,
+} from '@eminuckan/mimir-core/tenant/server';
+import { fetchIdentityContext } from './identity.server';
+
+configureTenantCookie({
+  httpOnly: false,
+  sameSite: 'Lax',
+});
+
+configureIdentityContextFetcher(fetchIdentityContext);
+
+export {
+  getAvailableTenants,
+  getCurrentTenant,
+  initializeTenant,
+};
+```
+
+### 2. Configure Server-Side Permission Protection
+
+```ts
+// app/lib/mimir/permissions.server.ts
+import {
+  configurePermissionRouteProtection,
+  requirePermission,
+} from '@eminuckan/mimir-core/server';
+import { getAuthSession } from '@eminuckan/mimir-core/react-router/server';
+import { contextToUserInfo, getIdentityContext } from './identity.server';
+import { getCurrentTenant } from './tenant.server';
+
+configurePermissionRouteProtection({
+  getSession: getAuthSession,
+  resolveContext: async (request, session) => {
+    if (!session.user?.sub) {
+      return { permissions: [], currentTenant: null };
+    }
+
+    const identityContext = await getIdentityContext(request, session.user.sub);
+    const currentTenant = await getCurrentTenant(request);
+    const userInfo = await contextToUserInfo(identityContext, {
+      currentTenant,
+      request,
+    });
+
+    return {
+      permissions: userInfo.permissions,
+      currentTenant: userInfo.currentTenant,
+    };
+  },
+});
+
+export { requirePermission };
+```
+
+### 3. Protect Routes
+
+```ts
+// app/routes/_protected.tsx
+import { authRoute, getAccessToken } from '@eminuckan/mimir-core/react-router/server';
+import { getCurrentTenant, initializeTenant } from '~/lib/mimir/tenant.server';
+import { contextToUserInfo, getIdentityContext } from '~/lib/mimir/identity.server';
+
+export async function loader({ request }: { request: Request }) {
+  return authRoute(request, async (user) => {
+    const [accessToken, identityContext, currentTenant] = await Promise.all([
+      getAccessToken(request),
+      getIdentityContext(request, user.sub),
+      getCurrentTenant(request),
+    ]);
+
+    const initResult =
+      !currentTenant && identityContext.hasAnyMembership
+        ? await initializeTenant(request)
+        : null;
+
+    const userInfo = await contextToUserInfo(identityContext, {
+      currentTenant: initResult?.tenantId ?? currentTenant,
+      request,
+    });
+
+    return {
+      user,
+      accessToken,
+      identity: {
+        ...identityContext,
+        permissions: userInfo.permissions,
+        currentTenant: userInfo.currentTenant,
+      },
+      tenantHeaders: initResult?.headers ?? null,
+    };
+  });
+}
+```
+
+### 4. Wire Client Providers
 
 ```tsx
+import { QueryClientProvider } from '@tanstack/react-query';
 import {
   TenantProvider,
   IdentityContextProvider,
   PermissionInitializer,
   createQueryClient,
-  initializeSignalR,
 } from '@eminuckan/mimir-core';
-import { QueryClientProvider } from '@tanstack/react-query';
 
-// Create query client
-const queryClient = createQueryClient({
-  onLogout: () => window.location.href = '/auth/logout',
-});
+const queryClient = createQueryClient();
 
-export default function App() {
-  const { tenant, identity, accessToken } = useLoaderData();
-
+export function AppProviders({
+  children,
+  tenant,
+  identity,
+  accessToken,
+}: {
+  children: React.ReactNode;
+  tenant: { currentTenant: string | null; availableTenants: string[]; memberships: any[] };
+  identity: { permissions: string[]; isLoading?: boolean } & Record<string, unknown>;
+  accessToken?: string | null;
+}) {
   return (
     <QueryClientProvider client={queryClient}>
       <TenantProvider
         initialTenant={tenant.currentTenant}
         initialTenants={tenant.availableTenants}
+        initialMemberships={tenant.memberships}
       >
         <IdentityContextProvider
           initialContext={identity}
           accessToken={accessToken}
         >
-          <PermissionInitializer permissions={identity.permissions}>
-            <Outlet />
+          <PermissionInitializer
+            permissions={identity.permissions as string[]}
+            isLoading={Boolean(identity.isLoading)}
+          >
+            {children}
           </PermissionInitializer>
         </IdentityContextProvider>
       </TenantProvider>
@@ -69,633 +339,87 @@ export default function App() {
 }
 ```
 
-### 2. Server-side Setup
+### 5. Configure Backend Conventions Instead of Forking
 
-```typescript
-// lib/auth.server.ts
+```ts
 import {
-  createAuthServer,
-  createRedisSessionStorage,
-  createRouteProtection,
+  configureAuthClaimMapping,
+  configureIdentityStore,
+  configureRouteProtection,
 } from '@eminuckan/mimir-core/server';
-import Redis from 'ioredis';
 
-const redis = new Redis(process.env.REDIS_URL);
-
-export const sessionStorage = createRedisSessionStorage({
-  redis,
-  prefix: 'session:',
-  ttl: 60 * 60 * 24 * 7, // 7 days
+configureAuthClaimMapping({
+  tenantIds: ['organizations', 'tenant_ids'],
+  tenantRoles: ['organization_roles', 'tenant_roles'],
+  permissions: ['permissions', 'scope'],
+  isOnboarded: ['profile_complete', 'is_onboarded'],
 });
 
-export const authServer = createAuthServer({
-  issuerUrl: process.env.OAUTH_ISSUER_URL!,
-  clientId: process.env.OAUTH_CLIENT_ID!,
-  clientSecret: process.env.OAUTH_CLIENT_SECRET!,
-  redirectUri: process.env.OAUTH_REDIRECT_URI!,
-  scopes: ['openid', 'profile', 'email', 'offline_access'],
-  sessionStorage,
+configureIdentityStore({
+  contextEndpoint: '/api/me/context',
+  permissionsEndpoint: '/api/me/permissions',
+  logoutPath: '/session/logout',
 });
 
-export const { getUser, getAccessToken, login, logout, handleCallback } = authServer;
-
-export const { protectRoute, authRoute, guestRoute } = createRouteProtection(
-  getUser,
-  '/auth/login',
-  '/app'
-);
-```
-
-### 3. API Client Setup
-
-```typescript
-// lib/api.server.ts
-import { createAPIConfigFactory } from '@eminuckan/mimir-core/server';
-import { getAccessToken } from './auth.server';
-import { getCurrentTenant } from './tenant.server';
-import { logger } from './logger';
-
-export const { createAPIConfig, getAPIBaseURL } = createAPIConfigFactory(
-  getAccessToken,
-  getCurrentTenant,
-  logger,
-  { baseURL: process.env.API_BASE_URL }
-);
-```
-
----
-
-## Module Reference
-
-### Auth Module
-
-OAuth2/OIDC authentication with automatic token refresh and Redis session storage.
-
-```typescript
-import {
-  createAuthServer,
-  createRedisSessionStorage,
-  createRouteProtection,
-  type AuthConfig,
-  type SessionData,
-} from '@eminuckan/mimir-core/server';
-```
-
-#### createAuthServer(config)
-
-Creates an auth server instance with OAuth2/OIDC support.
-
-```typescript
-const authServer = createAuthServer({
-  issuerUrl: 'https://auth.example.com',
-  clientId: 'your-client-id',
-  clientSecret: 'your-client-secret',
-  redirectUri: 'https://app.example.com/auth/callback',
-  scopes: ['openid', 'profile', 'offline_access'],
-  sessionStorage,
-});
-
-// Methods
-authServer.getUser(request);           // Get current user
-authServer.getAccessToken(request);    // Get access token
-authServer.login(request);             // Start OAuth flow
-authServer.logout(request);            // Clear session
-authServer.handleCallback(request);    // Handle OAuth callback
-authServer.attemptTokenRefresh(request); // Refresh access token
-```
-
-#### createRouteProtection(getUser, loginUrl, dashboardUrl)
-
-Creates route protection utilities.
-
-```typescript
-const { protectRoute, authRoute, guestRoute } = createRouteProtection(
-  getUser,
-  '/auth/login',
-  '/app'
-);
-
-// Usage in loaders
-export async function loader({ request }) {
-  const user = await protectRoute(request); // Requires auth
-  return { user };
-}
-
-export async function loader({ request }) {
-  await guestRoute(request); // Redirects if already logged in
-  return null;
-}
-
-export async function loader({ request }) {
-  const user = await authRoute(request); // Optional auth
-  return { user };
-}
-```
-
----
-
-### Permissions Module
-
-RBAC permission system with Zustand store, React hooks, and protected components.
-
-```typescript
-import {
-  // Store
-  usePermissionStore,
-  
-  // Hooks
-  usePermission,
-  useHasPermission,
-  useHasAnyPermission,
-  useHasAllPermissions,
-  
-  // Components
-  ProtectedButton,
-  ProtectedSection,
-  ProtectedLink,
-  
-  // Service
-  PermissionChecker,
-  
-  // Types
-  type PermissionCode,
-  type PermissionCheckOptions,
-} from '@eminuckan/mimir-core';
-```
-
-#### Hooks
-
-```typescript
-// Single permission check
-const canCreate = useHasPermission('Identity.Users.Create');
-
-// Multiple permissions (any)
-const canEdit = useHasAnyPermission(['Identity.Users.Edit', 'Identity.Users.Admin']);
-
-// Multiple permissions (all)
-const canManage = useHasAllPermissions(['Identity.Users.View', 'Identity.Users.Edit']);
-
-// Full permission object
-const { hasPermission, isLoading } = usePermission('Identity.Users.Create');
-```
-
-#### Components
-
-```tsx
-// Protected Button - disabled if no permission
-<ProtectedButton
-  permission="Identity.Users.Create"
-  onClick={handleCreate}
-  fallback={<Button disabled>Create User</Button>}
->
-  Create User
-</ProtectedButton>
-
-// Protected Section - hidden if no permission
-<ProtectedSection
-  permission="Identity.Users.View"
-  fallback={<AccessDenied />}
->
-  <UserList />
-</ProtectedSection>
-
-// Protected Link - hidden if no permission
-<ProtectedLink permission="Identity.Users.Edit" to={`/users/${id}/edit`}>
-  Edit
-</ProtectedLink>
-```
-
-#### Permission Initializer
-
-```tsx
-// Initialize permissions from server
-<PermissionInitializer permissions={['Identity.Users.View', 'Identity.Users.Create']}>
-  <App />
-</PermissionInitializer>
-```
-
----
-
-### Tenant Module
-
-Multi-tenant context management with cookie persistence.
-
-```typescript
-import {
-  // Client
-  TenantProvider,
-  useTenant,
-  useTenantStore,
-  
-  // Server
-  createTenantServerFactory,
-  createTenantCookieFactory,
-} from '@eminuckan/mimir-core';
-```
-
-#### Client Usage
-
-```tsx
-// Provider
-<TenantProvider
-  initialTenant="tenant-123"
-  initialTenants={['tenant-123', 'tenant-456']}
->
-  <App />
-</TenantProvider>
-
-// Hook
-function TenantSwitcher() {
-  const { currentTenant, availableTenants, setCurrentTenant } = useTenant();
-  
-  return (
-    <select 
-      value={currentTenant} 
-      onChange={(e) => setCurrentTenant(e.target.value)}
-    >
-      {availableTenants.map(t => <option key={t} value={t}>{t}</option>)}
-    </select>
-  );
-}
-```
-
-#### Server Usage
-
-```typescript
-import { createTenantServerFactory } from '@eminuckan/mimir-core/server';
-
-const { getCurrentTenant, setCurrentTenant, getAvailableTenants } = createTenantServerFactory(
-  getSession,
-  setSession,
-  { cookieName: 'tenant_id' }
-);
-
-// In loader
-export async function loader({ request }) {
-  const tenantId = await getCurrentTenant(request);
-  return { tenantId };
-}
-```
-
----
-
-### Identity Module
-
-User identity context with SignalR real-time updates.
-
-```typescript
-import {
-  // Client
-  IdentityContextProvider,
-  useIdentityStore,
-  useIsOnboarded,
-  useHasSubscription,
-  useUserTenants,
-  useUserPermissions,
-  useIdentityContext,
-  
-  // Server
-  fetchIdentityContext,
-  getIdentityContext,
-  clearIdentityContextCache,
-  configureIdentityAPIFetcher,
-  configurePermissionFetcher,
-} from '@eminuckan/mimir-core';
-```
-
-#### Client Usage
-
-```tsx
-// Provider with SignalR
-<IdentityContextProvider
-  initialContext={identity}
-  accessToken={accessToken}
-  signalRClient={signalRClient}
->
-  <App />
-</IdentityContextProvider>
-
-// Store access
-function Profile() {
-  const { context, refreshContext, refreshPermissions } = useIdentityContext();
-  
-  return (
-    <div>
-      <h1>{context.displayName}</h1>
-      <p>{context.email}</p>
-      <button onClick={refreshContext}>Refresh</button>
-    </div>
-  );
-}
-
-// Convenience hooks
-const isOnboarded = useIsOnboarded();
-const hasSubscription = useHasSubscription();
-const { tenants, currentTenant } = useUserTenants();
-const permissions = useUserPermissions();
-```
-
-#### Server Usage
-
-```typescript
-import { configureIdentityAPIFetcher, getIdentityContext } from '@eminuckan/mimir-core/server';
-
-// Configure API fetcher (once at startup)
-configureIdentityAPIFetcher(async (request) => {
-  const config = await createAPIConfig(request);
-  const response = await fetch(`${config.basePath}/api/identity/context`, {
-    headers: config.headers,
-  });
-  return response.json();
-});
-
-// Use in loader
-export async function loader({ request }) {
-  const user = await getUser(request);
-  const identity = await getIdentityContext(request, user.id);
-  return { identity };
-}
-```
-
----
-
-### API Client Module
-
-Axios setup with automatic token refresh, retry logic, and error handling.
-
-```typescript
-import {
-  // Client
-  ApiError,
-  ErrorHandler,
-  handleApiError,
-  ErrorCodes,
-  withRetry,
-  fetchWithTimeout,
-  
-  // Server
-  createAPIConfigFactory,
-  setupAxiosInterceptors,
-  createEnhancedClient,
-} from '@eminuckan/mimir-core/server';
-```
-
-#### API Config Factory
-
-```typescript
-const { createAPIConfig, getAPIBaseURL } = createAPIConfigFactory(
-  getAccessToken,
-  getCurrentTenant,
-  logger,
-  {
-    baseURL: 'https://api.example.com',
-    userAgent: 'MyApp/1.0',
-    timeout: 30000,
-  }
-);
-
-// Usage
-const config = await createAPIConfig(request);
-// config.basePath, config.headers, config.tenantId, config.accessToken
-```
-
-#### Enhanced Client
-
-```typescript
-import { IdentityApi, Configuration } from './generated-api';
-
-const { client, tenantId } = await createEnhancedClient(
-  request,
-  IdentityApi,
-  createAPIConfig,
-  Configuration,
-  {
-    logger,
-    attemptTokenRefresh,
-    retryConfig: { maxRetries: 3 },
-  }
-);
-
-const users = await client.getUsers(tenantId);
-```
-
-#### Error Handling
-
-```typescript
-try {
-  await api.createUser(data);
-} catch (error) {
-  const apiError = handleApiError(error);
-  
-  if (apiError.code === ErrorCodes.VALIDATION_ERROR) {
-    // Handle validation errors
-    console.log(apiError.validationErrors);
-  } else if (apiError.code === ErrorCodes.NOT_FOUND) {
-    // Handle not found
-  }
-}
-```
-
----
-
-### SignalR Module
-
-Real-time communication client for identity context changes.
-
-```typescript
-import {
-  SignalRClient,
-  IdentitySignalRClient,
-  initializeSignalR,
-  cleanupSignalR,
-  getIdentitySignalRClient,
-  type SignalRClientConfig,
-  type IdentityContextChangedEvent,
-} from '@eminuckan/mimir-core';
-```
-
-#### Usage
-
-```typescript
-// Initialize
-const client = await initializeSignalR(accessToken, {
-  baseUrl: 'https://api.example.com',
-  verbose: true,
-  autoReconnectOnVisibility: true,
-});
-
-// Listen for events
-const unsubscribe = client.onIdentityContextChanged((event) => {
-  console.log('Context changed:', event.reason);
-  
-  if (event.reason === 'PermissionsChanged') {
-    refreshPermissions();
-  } else {
-    refreshContext();
-  }
-});
-
-// Cleanup
-await cleanupSignalR();
-```
-
----
-
-### Query Client Module
-
-TanStack Query configuration with optimized caching.
-
-```typescript
-import {
-  createQueryClient,
-  cachePresets,
-  createQueryKeyFactory,
-  invalidationHelpers,
-  type QueryClientConfig,
-} from '@eminuckan/mimir-core';
-```
-
-#### Setup
-
-```typescript
-const queryClient = createQueryClient({
-  staleTime: 5 * 60 * 1000,      // 5 minutes
-  gcTime: 10 * 60 * 1000,        // 10 minutes
-  maxRetries: 3,
-  refetchOnWindowFocus: true,
-  logger,
-  onLogout: () => window.location.href = '/auth/logout',
+configureRouteProtection({
+  getLoginReturnUrl: ({ request }) => new URL(request.url).pathname,
 });
 ```
 
-#### Cache Presets
+More adaptation examples live in [docs/backend-adaptation.md](docs/backend-adaptation.md).
 
-```typescript
-// Static data (permissions, roles) - long cache
-cachePresets.static   // staleTime: 30min, gcTime: 1hr
+## Module Guides
 
-// Normal data (properties, users)
-cachePresets.normal   // staleTime: 5min, gcTime: 10min
+- [Architecture](docs/architecture.md)
+- [Adapters](docs/adapters.md)
+- [Backend Adaptation](docs/backend-adaptation.md)
+- [Module Reference](docs/module-reference.md)
+- [Releasing](docs/releasing.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
 
-// Dynamic data (transactions)
-cachePresets.dynamic  // staleTime: 1min, gcTime: 5min
+## Current Boundaries
 
-// Realtime data (live status)
-cachePresets.realtime // staleTime: 0, gcTime: 1min
-```
+Mimir already owns the reusable infrastructure for:
 
-#### Query Key Factory
+- Session lifecycle
+- OAuth state and token refresh
+- Tenant state and tenant cookie handling
+- Identity cache and permission resolution
+- Permission route protection
+- API client setup
 
-```typescript
-const propertyKeys = createQueryKeyFactory('properties');
+Consuming apps should still own:
 
-// ['properties']
-propertyKeys.all
+- Product-specific onboarding pages and redirects
+- Product-specific subscription policies
+- Permission constants and domain vocabulary
+- Generated API clients
+- UI-specific wrappers and design system components
 
-// ['properties', 'list']
-propertyKeys.lists()
+## Roadmap
 
-// ['properties', 'list', { status: 'active' }]
-propertyKeys.list({ status: 'active' })
+- First-class Next.js adapter surface
+- More adapter authoring guidance
+- Cleaner permission taxonomy extension story
+- More example apps
+- Broader runtime coverage tests
 
-// ['properties', 'detail', '123']
-propertyKeys.detail('123')
-```
-
----
-
-### Logging Module
-
-Structured logging with configurable levels.
-
-```typescript
-import {
-  createLogger,
-  Logger,
-  LogLevel,
-  type LoggerConfig,
-} from '@eminuckan/mimir-core';
-```
-
-#### Usage
-
-```typescript
-const logger = createLogger({
-  minLevel: LogLevel.DEBUG,
-  enableConsole: true,
-  enableRemote: process.env.NODE_ENV === 'production',
-  remoteEndpoint: '/api/logs',
-  serviceName: 'dashboard-app',
-});
-
-logger.debug('Debug message', { context: 'value' });
-logger.info('Info message');
-logger.warn('Warning message', error);
-logger.error('Error message', error, { userId: '123' });
-```
-
----
-
-## TypeScript Support
-
-All modules are fully typed. Import types as needed:
-
-```typescript
-import type {
-  // Auth
-  AuthConfig,
-  SessionData,
-  TokenRefreshResult,
-  
-  // Permissions
-  PermissionCode,
-  PermissionCheckOptions,
-  
-  // Tenant
-  Tenant,
-  TenantState,
-  
-  // Identity
-  IdentityContextData,
-  UserInfo,
-  TenantMembership,
-  
-  // API
-  APIConfig,
-  ProblemDetails,
-  APILogger,
-  
-  // SignalR
-  SignalRClientConfig,
-  IdentityContextChangedEvent,
-  
-  // Query
-  QueryClientConfig,
-  CachePreset,
-  
-  // Logging
-  LogLevel,
-  LogEntry,
-} from '@eminuckan/mimir-core';
-```
-
----
-
-## Publishing
+## Development
 
 ```bash
-# Login to npmjs (one-time)
-npm login
-
-# Build and publish
+pnpm install
+pnpm typecheck
 pnpm build
-npm publish --access public
+pnpm lint
 ```
 
-## Contributing
+Detailed contributor guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## Versioning
+
+Mimir currently uses semver with a `0.x` release line. Breaking changes can still happen more frequently than a mature `1.x` package, but they should be documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT © [Muhammet Emin Üçkan](https://github.com/eminuckan)
+[MIT](LICENSE)

@@ -8,7 +8,7 @@
  */
 
 import { QueryClient, QueryCache, MutationCache } from '@tanstack/react-query';
-import type { QueryClientConfig, CachePresets, QueryLogger } from './types';
+import type { QueryClientConfig, CachePresets } from './types';
 
 /**
  * Default configuration

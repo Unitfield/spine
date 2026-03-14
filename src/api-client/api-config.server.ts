@@ -59,7 +59,7 @@ export function createAPIConfigFactory(
   const {
     baseURL = DEFAULT_API_BASE_URL,
     defaultHeaders = DEFAULT_HEADERS,
-    userAgent = 'Propmate/1.0',
+    userAgent = 'MimirCore/1.0',
     timeout = 30000,
   } = factoryOptions;
 

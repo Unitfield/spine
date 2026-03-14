@@ -1,17 +1,8 @@
 ﻿/**
- * @propmate/core
- * 
- * Core infrastructure package for Propmate applications.
- * 
- * Modules:
- * - auth: OAuth2/OIDC authentication with route protection
- * - permissions: RBAC permission system with Zustand store
- * - tenant: Multi-tenant context management
- * - identity: User identity context with SignalR real-time updates
- * - api-client: API client configuration and error handling
- * - signalr: Real-time SignalR client
- * - query-client: TanStack Query configuration
- * - logging: Structured logging
+ * Mimir Core
+ *
+ * Framework-agnostic primitives for auth, permissions, tenant context,
+ * identity, API access, realtime signaling, query configuration, and logging.
  */
 
 // Logging (can be used everywhere)

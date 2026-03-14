@@ -6,7 +6,6 @@
 
 import { getAuthSession } from '../auth/redis-session-storage.server';
 import { getActiveTenant, setActiveTenant, clearActiveTenant } from './tenant-cookie.server';
-import type { TenantInfo } from './types';
 
 /**
  * Identity context fetcher type (to avoid circular dependency)
@@ -163,7 +162,7 @@ export async function initializeTenant(
 /**
  * Clear current tenant
  */
-export async function clearCurrentTenant(request: Request): Promise<Headers> {
+export async function clearCurrentTenant(): Promise<Headers> {
   const cookieValue = await clearActiveTenant();
   const headers = new Headers();
   headers.append('Set-Cookie', cookieValue);

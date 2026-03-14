@@ -43,7 +43,7 @@ export function IdentityContextProvider({
     const handleContextChange = (event: IdentityContextChangedEvent) => {
       console.log('Identity context changed via SignalR:', event);
 
-      if (event.contextVersion > contextVersion) {
+      if (event.contextVersion > (contextVersion ?? 0)) {
         console.log('Refreshing context due to SignalR event...');
 
         if (event.reason === 'PermissionsChanged' || event.reason === 'RoleAssignmentChanged') {

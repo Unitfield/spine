@@ -185,7 +185,7 @@ export function setupAxiosInterceptors(
             logger?.info?.('Token refresh successful, retrying original request');
 
             // Update authorization header with new token
-            originalRequest.headers.Authorization = "Bearer ${refreshResult.newAccessToken}";
+            originalRequest.headers.Authorization = `Bearer ${refreshResult.newAccessToken}`;
 
             // Retry the original request with new token
             return axiosInstance(originalRequest);

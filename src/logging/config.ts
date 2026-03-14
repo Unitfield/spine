@@ -15,5 +15,5 @@ export const defaultLoggerConfig: LoggerConfig = {
   minLevel: process.env.NODE_ENV === 'production' ? LogLevel.INFO : LogLevel.DEBUG,
   enableConsole: true,
   enableRemote: false,
-  serviceName: 'propmate',
+  serviceName: 'mimir',
 };

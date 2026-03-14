@@ -4,7 +4,7 @@
  * Server-side identity context management.
  */
 
-import type { IdentityContextData, TenantMembership } from './types';
+import type { AddressData, IdentityContextData, TenantMembership } from './types';
 import { logger } from '../logging';
 
 /**
@@ -99,7 +99,7 @@ export async function getIdentityContext(
   contextCache.set(cacheKey, {
     context,
     timestamp: now,
-    version: context.contextVersion,
+    version: context.contextVersion ?? 0,
   });
 
   logger.debug('Cached fresh identity context for user', { userId });
@@ -152,4 +152,90 @@ export async function fetchUserPermissions(request: Request, tenantId: string): 
     logger.error('Failed to fetch user permissions', error instanceof Error ? error : undefined);
     return [];
   }
+}
+
+export interface UserContextInfo {
+  tenants: string[];
+  memberships: TenantMembership[];
+  currentTenant?: string;
+  isOnboarded: boolean;
+  permissions: string[];
+  hasSubscription: boolean;
+  userId?: string;
+  email?: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null;
+  profileImageUrl?: string | null;
+  phoneNumber?: string | null;
+  timeZone?: string;
+  addresses?: AddressData[];
+  hasOwnerMembership: boolean;
+}
+
+export interface ContextToUserInfoOptions {
+  currentTenant?: string | null;
+  request?: Request;
+}
+
+/**
+ * Convert raw identity context into a tenant-aware user info shape.
+ */
+export async function contextToUserInfo(
+  context: IdentityContextData,
+  options: ContextToUserInfoOptions = {}
+): Promise<UserContextInfo> {
+  const memberships = context.memberships || [];
+  const tenants = memberships.map((membership) => membership.tenantId);
+  const resolvedCurrentTenant =
+    options.currentTenant && tenants.includes(options.currentTenant)
+      ? options.currentTenant
+      : tenants[0] || undefined;
+
+  let permissions: string[] = [];
+  if (resolvedCurrentTenant && options.request) {
+    permissions = await fetchUserPermissions(options.request, resolvedCurrentTenant);
+  }
+
+  return {
+    tenants,
+    memberships,
+    currentTenant: resolvedCurrentTenant,
+    isOnboarded: context.isOnboarded ?? false,
+    permissions,
+    hasSubscription: context.hasSubscription ?? false,
+    userId: context.userId,
+    email: context.email,
+    firstName: context.firstName,
+    lastName: context.lastName,
+    displayName: context.displayName,
+    profileImageUrl: context.profileImageUrl,
+    phoneNumber: context.phoneNumber,
+    timeZone: context.timeZone,
+    addresses: context.addresses,
+    hasOwnerMembership: context.hasOwnerMembership ?? false,
+  };
+}
+
+/**
+ * Check if a cached context version differs from the latest version.
+ */
+export function hasContextVersionChanged(userId: string, newVersion: number): boolean {
+  const cached = contextCache.get(userId);
+  return !cached || cached.version !== newVersion;
+}
+
+/**
+ * Mark a cached identity context as stale after a version change.
+ */
+export function updateContextVersion(userId: string, newVersion: number): void {
+  const cached = contextCache.get(userId);
+  if (!cached) return;
+
+  cached.version = newVersion;
+  cached.timestamp = 0;
+  logger.debug('Marked identity context as stale for user', {
+    userId,
+    version: newVersion,
+  });
 }

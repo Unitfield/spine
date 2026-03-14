@@ -6,12 +6,13 @@
 
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import type { OrganizationData } from './types';
+import type { OrganizationData, TenantMembership } from './types';
 
 interface TenantState {
   // State
   currentTenant: string | null;
   availableTenants: string[];
+  memberships: Map<string, TenantMembership>;
   organizations: Map<string, OrganizationData>;
   isLoading: boolean;
   isSwitching: boolean;
@@ -19,6 +20,7 @@ interface TenantState {
   // Actions
   setCurrentTenant: (tenantId: string | null) => void;
   setAvailableTenants: (tenants: string[]) => void;
+  setMemberships: (memberships: TenantMembership[]) => void;
   setOrganization: (tenantId: string, data: OrganizationData) => void;
   addOrganization: (tenantId: string, data: OrganizationData) => void;
   setLoading: (loading: boolean) => void;
@@ -29,6 +31,9 @@ interface TenantState {
   switchTenant: (tenantId: string) => Promise<void>;
 
   // Getters
+  getMembership: (tenantId: string) => TenantMembership | null;
+  getCurrentMembership: () => TenantMembership | null;
+  getTenantName: (tenantId: string) => string;
   getOrganization: (tenantId: string) => OrganizationData | null;
   getCurrentOrganization: () => OrganizationData | null;
 }
@@ -60,6 +65,7 @@ export const useTenantStore = create<TenantState>()(
       // Initial state
       currentTenant: null,
       availableTenants: [],
+      memberships: new Map(),
       organizations: new Map(),
       isLoading: false,
       isSwitching: false,
@@ -77,6 +83,14 @@ export const useTenantStore = create<TenantState>()(
             fetchOrganization(tenantId);
           }
         });
+      },
+
+      setMemberships: (memberships) => {
+        const membershipMap = new Map<string, TenantMembership>();
+        memberships.forEach((membership) => {
+          membershipMap.set(membership.tenantId, membership);
+        });
+        set({ memberships: membershipMap });
       },
 
       setOrganization: (tenantId, data) =>
@@ -149,6 +163,29 @@ export const useTenantStore = create<TenantState>()(
       },
 
       // Getters
+      getMembership: (tenantId) => {
+        const { memberships } = get();
+        return memberships.get(tenantId) || null;
+      },
+
+      getCurrentMembership: () => {
+        const { currentTenant, memberships } = get();
+        if (!currentTenant) return null;
+        return memberships.get(currentTenant) || null;
+      },
+
+      getTenantName: (tenantId) => {
+        const { memberships, organizations } = get();
+        const membership = memberships.get(tenantId);
+        if (membership?.tenantName) {
+          return membership.tenantName;
+        }
+        if (membership?.organizationName) {
+          return membership.organizationName;
+        }
+        return organizations.get(tenantId)?.name || tenantId;
+      },
+
       getOrganization: (tenantId) => {
         const { organizations } = get();
         return organizations.get(tenantId) || null;
@@ -169,9 +206,13 @@ export const useTenantStore = create<TenantState>()(
  */
 export function initializeTenantStore(
   currentTenant: string | null,
-  availableTenants: string[]
+  availableTenants: string[],
+  memberships?: TenantMembership[]
 ) {
   const store = useTenantStore.getState();
   store.setCurrentTenant(currentTenant);
   store.setAvailableTenants(availableTenants);
+  if (memberships) {
+    store.setMemberships(memberships);
+  }
 }
