@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/spine",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
   "main": "./dist/index.js",
@@ -85,7 +85,6 @@
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
-    "clean": "rimraf dist",
     "prepublishOnly": "pnpm run build"
   },
   "peerDependencies": {
@@ -94,10 +93,8 @@
   },
   "dependencies": {
     "@microsoft/signalr": "^9.0.0",
-    "clsx": "^2.1.1",
     "ioredis": "^5.4.1",
     "oauth4webapi": "^3.3.0",
-    "tailwind-merge": "^2.5.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
@@ -106,7 +103,6 @@
     "@types/react": "^18.3.0",
     "eslint": "^9.0.0",
     "globals": "^17.4.0",
-    "rimraf": "^6.0.0",
     "tsdown": "^0.9.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.57.0"
