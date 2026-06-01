@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.1] - 2026-06-01
+
+### Changed
+
+- Clarified README positioning, backend contract guidance, and quick-start snippets for the open source package.
+
 ## [0.3.0] - 2026-06-01
 
 ### Added

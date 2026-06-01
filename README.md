@@ -4,17 +4,20 @@
 [![npm version](https://img.shields.io/npm/v/%40eminuckan%2Fspine.svg)](https://www.npmjs.com/package/@eminuckan/spine)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Framework-agnostic SaaS primitives for authentication, identity, permissions, multi-tenancy, API access, realtime events, query configuration, and logging.
+Framework-agnostic TypeScript primitives for authentication, identity, permissions, multi-tenancy, API access, realtime events, query configuration, and logging in SaaS frontends.
 
-Spine is designed around one idea: the reusable parts of a SaaS platform should live in a single package, while application policy and framework quirks should stay in thin adapters. Today the package ships a framework-agnostic core plus a React Router adapter surface. Future adapters can follow the same pattern.
+Spine is designed around one idea: the reusable infrastructure in a SaaS frontend should live in a shared package, while product policy, backend DTOs, generated clients, and framework glue should stay in thin adapters owned by the consuming app.
+
+The package is currently on a `0.x` release line. It is usable, tested, and published, but some compatibility aliases remain while the public API moves toward a cleaner `1.0` shape.
 
 ## Status
 
 - Core package: `@eminuckan/spine`
 - Current adapter: `@eminuckan/spine/react-router`
-- Server primitives use Web `Request`/`Response` objects, not framework-specific response helpers
-- React Router adapter is intentionally thin today so other adapters can be added without changing the core contract
-- Extracted from repeated production-facing SaaS frontend infrastructure needs, then rebooted as an independent OSS package
+- Server-facing APIs accept Web `Request`/`Response` objects instead of framework-specific response helpers
+- React Router adapter is intentionally thin so future adapters can follow the same core contract
+- Built-in auth uses OpenID Connect and Redis-backed session/OAuth state storage
+- Extracted from repeated production-facing SaaS frontend infrastructure needs and maintained as independent OSS
 
 ## Why Spine
 
@@ -25,6 +28,7 @@ Spine aims to be:
 - Framework-agnostic at its core
 - Adapter-friendly for framework integration
 - Config-driven for backend conventions
+- Explicit about backend contracts instead of forcing one API shape
 - Honest about boundaries between reusable primitives and app-specific policy
 - Small enough to understand, flexible enough to extend
 
@@ -32,7 +36,7 @@ Spine aims to be:
 
 - Core before adapter: framework-specific behavior belongs in dedicated adapter entry points
 - Configure, do not fork: backend claim names, cookie behavior, endpoints, and redirects should be configured first
-- Request/Response first: server modules should work anywhere a standard Web `Request` and `Response` exist
+- Request/Response first: server-facing APIs should use standard Web `Request` and `Response` objects
 - App policy stays local: setup flows, entitlement gates, product-specific redirects, and permission taxonomies should live in the consuming app
 - Open for composition: apps should be able to wrap Spine primitives instead of rewriting them
 
@@ -41,7 +45,7 @@ Spine aims to be:
 | Entry point | Purpose |
 | --- | --- |
 | `@eminuckan/spine` | Client-side primitives and shared types |
-| `@eminuckan/spine/server` | Framework-agnostic server primitives |
+| `@eminuckan/spine/server` | Framework-agnostic server primitives and shared exports |
 | `@eminuckan/spine/react-router` | React Router client adapter |
 | `@eminuckan/spine/react-router/server` | React Router server adapter |
 | `@eminuckan/spine/auth` | Auth types |
@@ -80,6 +84,20 @@ Spine aims to be:
 - Your page structure, layouts, or UI system
 
 Those belong in the consuming app or in a product-specific adapter package.
+
+## Backend Contract Model
+
+Spine does not require your backend to expose a fixed set of endpoints. It provides defaults for simple apps, but real SaaS apps often have different vocabulary:
+
+- tenant, workspace, account, company, project, or organization
+- permissions, capabilities, scopes, roles, or policy grants
+- bearer headers, custom session headers, cookie-backed APIs, or generated clients
+
+The intended integration style is:
+
+1. Configure claim names, cookie names, route policy, and API headers.
+2. Provide fetchers when your identity, permission, or tenant response shape differs.
+3. Keep product setup, billing, entitlement, and permission vocabulary in your app.
 
 ## Architecture
 
@@ -139,7 +157,7 @@ The built-in auth/session layer currently reads these environment variables:
 | `OIDC_CLIENT_AUTH_METHOD` | No | `none`, `client_secret_post`, or `client_secret_basic` |
 | `OIDC_SCOPE` | No | Requested scope string. Defaults to `openid profile email api` |
 | `OIDC_POST_LOGOUT_REDIRECT_URI` | No | Logout return URL |
-| `OIDC_APPLICATION_TYPE` | No | `no-landing-page`, `landing-page`, or legacy aliases |
+| `OIDC_APPLICATION_TYPE` | No | `no-landing-page`, `landing-page`, or deprecated aliases `dashboard` and `tenant-app` |
 | `OIDC_HAS_LANDING_PAGE` | No | Explicit landing-page behavior override |
 | `OIDC_ALLOW_INSECURE_REQUESTS` | No | Allows non-HTTPS OIDC issuer calls only outside production |
 | `REDIS_URL` | No | Redis connection string for sessions and OAuth state |
@@ -185,9 +203,40 @@ Back-channel logout verifies the signed `logout_token` against the provider JWKS
 
 ## Quick Start
 
-### 1. Configure Identity and Tenant Adapters
+The snippets below show the integration shape. See [examples/react-router-saas](examples/react-router-saas) for a runnable React Router app.
 
-Spine's server modules are generic, so your app should provide backend-specific fetchers once.
+### 1. Add Auth Routes
+
+```ts
+// app/routes/auth.login.tsx
+import { login } from '@eminuckan/spine/react-router/server';
+
+export async function loader({ request }: { request: Request }) {
+  throw await login(request, { returnUrl: '/dashboard' });
+}
+```
+
+```ts
+// app/routes/auth.callback.tsx
+import { handleCallback } from '@eminuckan/spine/react-router/server';
+
+export async function loader({ request }: { request: Request }) {
+  return handleCallback(request);
+}
+```
+
+```ts
+// app/routes/auth.logout.tsx
+import { logout } from '@eminuckan/spine/react-router/server';
+
+export async function loader({ request }: { request: Request }) {
+  return logout(request);
+}
+```
+
+### 2. Configure Server Adapters
+
+Spine's server modules are generic. Your app should provide backend-specific identity and tenant fetchers once.
 
 ```ts
 // app/lib/spine/identity.server.ts
@@ -197,20 +246,19 @@ import {
   contextToUserInfo,
   getIdentityContext,
 } from '@eminuckan/spine/identity/server';
-import { createAPIConfigFactory } from '@eminuckan/spine/api-client/server';
 import { getAccessToken } from '@eminuckan/spine/react-router/server';
-import { getCurrentTenant } from '@eminuckan/spine/tenant/server';
 
-const { createAPIConfig } = createAPIConfigFactory(getAccessToken, getCurrentTenant);
+const apiBaseUrl = process.env.API_BASE_URL;
+
+if (!apiBaseUrl) {
+  throw new Error('API_BASE_URL is required by this app adapter.');
+}
 
 configureIdentityAPIFetcher(async (request) => {
-  const config = await createAPIConfig(request, {
-    requireTenant: false,
-    includeAuth: true,
-  });
+  const accessToken = await getAccessToken(request);
 
-  const response = await fetch(`${config.basePath}/api/me/context`, {
-    headers: config.headers,
+  const response = await fetch(`${apiBaseUrl}/api/me/context`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
   });
 
   if (!response.ok) {
@@ -221,9 +269,12 @@ configureIdentityAPIFetcher(async (request) => {
 });
 
 configurePermissionFetcher(async (request, tenantId) => {
-  const config = await createAPIConfig(request, { requireTenant: false });
-  const response = await fetch(`${config.basePath}/api/me/permissions?tenantId=${tenantId}`, {
-    headers: config.headers,
+  const accessToken = await getAccessToken(request);
+  const url = new URL('/api/me/permissions', apiBaseUrl);
+  url.searchParams.set('tenantId', tenantId);
+
+  const response = await fetch(url, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
   });
 
   if (!response.ok) {
@@ -231,7 +282,7 @@ configurePermissionFetcher(async (request, tenantId) => {
   }
 
   const payload = await response.json();
-  return payload.permissions || [];
+  return Array.isArray(payload.permissions) ? payload.permissions : [];
 });
 
 export { contextToUserInfo, getIdentityContext };
@@ -242,105 +293,58 @@ export { contextToUserInfo, getIdentityContext };
 import {
   configureTenantResolution,
   configureTenantCookie,
-  getAvailableTenants,
-  getCurrentTenant,
+  getActiveTenant,
   initializeTenant,
 } from '@eminuckan/spine/tenant/server';
-import { fetchIdentityContext } from './identity.server';
+import { getUser } from '@eminuckan/spine/react-router/server';
+import { getIdentityContext } from './identity.server';
 
 configureTenantCookie({
+  name: '__spine_tenant',
   httpOnly: false,
   sameSite: 'Lax',
 });
 
 configureTenantResolution({
-  identityContextFetcher: fetchIdentityContext,
-});
-
-export {
-  getAvailableTenants,
-  getCurrentTenant,
-  initializeTenant,
-};
-```
-
-### 2. Configure Server-Side Permission Protection
-
-```ts
-// app/lib/spine/permissions.server.ts
-import {
-  configurePermissionRouteProtection,
-  requirePermission,
-} from '@eminuckan/spine/server';
-import { getAuthSession } from '@eminuckan/spine/react-router/server';
-import { contextToUserInfo, getIdentityContext } from './identity.server';
-import { getCurrentTenant } from './tenant.server';
-
-configurePermissionRouteProtection({
-  getSession: getAuthSession,
-  resolveContext: async (request, session) => {
-    if (!session.user?.sub) {
-      return { permissions: [], currentTenant: null };
+  identityContextFetcher: async (request) => {
+    const user = await getUser(request);
+    if (!user) {
+      return null;
     }
 
-    const identityContext = await getIdentityContext(request, session.user.sub);
-    const currentTenant = await getCurrentTenant(request);
-    const userInfo = await contextToUserInfo(identityContext, {
-      currentTenant,
-      request,
-    });
-
+    const context = await getIdentityContext(request, user.sub);
     return {
-      permissions: userInfo.permissions,
-      currentTenant: userInfo.currentTenant,
+      memberships: context.memberships ?? [],
     };
   },
 });
 
-export { requirePermission };
+export { getActiveTenant, initializeTenant };
 ```
 
-### 3. Protect Routes
+### 3. Protect a Route
 
 ```ts
-// app/routes/_protected.tsx
+// app/routes/dashboard.tsx
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
-import { getCurrentTenant, initializeTenant } from '~/lib/spine/tenant.server';
-import { contextToUserInfo, getIdentityContext } from '~/lib/spine/identity.server';
+import { getActiveTenant, initializeTenant } from '~/lib/spine/tenant.server';
 
 export async function loader({ request }: { request: Request }) {
   return authRoute(request, async (user) => {
-    const [accessToken, identityContext, currentTenant] = await Promise.all([
-      getAccessToken(request),
-      getIdentityContext(request, user.sub),
-      getCurrentTenant(request),
-    ]);
-
-    const initResult =
-      !currentTenant && identityContext.hasAnyMembership
-        ? await initializeTenant(request)
-        : null;
-
-    const userInfo = await contextToUserInfo(identityContext, {
-      currentTenant: initResult?.tenantId ?? currentTenant,
-      request,
-    });
+    const currentTenant = await getActiveTenant(request);
+    const initializedTenant = currentTenant ? null : await initializeTenant(request);
+    const accessToken = await getAccessToken(request);
 
     return {
       user,
-      accessToken,
-      identity: {
-        ...identityContext,
-        permissions: userInfo.permissions,
-        currentTenant: userInfo.currentTenant,
-      },
-      tenantHeaders: initResult?.headers ?? null,
+      hasAccessToken: Boolean(accessToken),
+      currentTenant: initializedTenant?.tenantId ?? currentTenant,
     };
   });
 }
 ```
 
-### 4. Wire Client Providers
+### 4. Wire React Providers
 
 ```tsx
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -388,14 +392,12 @@ export function AppProviders({
 }
 ```
 
-### 5. Configure Backend Conventions Instead of Forking
+### 5. Configure Conventions Instead of Forking
 
 ```ts
-import {
-  configureAuthClaimMapping,
-  configureIdentityStore,
-  configureRouteProtection,
-} from '@eminuckan/spine/server';
+import { configureAuthClaimMapping, configureRouteProtection } from '@eminuckan/spine/server';
+import { configureIdentityStore } from '@eminuckan/spine/identity';
+import { configureTenantClient } from '@eminuckan/spine/tenant';
 
 configureAuthClaimMapping({
   tenantIds: ['tenant_ids'],
@@ -410,6 +412,17 @@ configureIdentityStore({
   logoutPath: '/session/logout',
 });
 
+configureTenantClient({
+  fetchTenantData: async ({ tenantId }) => {
+    const response = await fetch(`/api/workspaces/${tenantId}`);
+    const payload = await response.json();
+    return {
+      id: payload.workspace.id,
+      name: payload.workspace.displayName,
+    };
+  },
+});
+
 configureRouteProtection({
   getLoginReturnUrl: ({ request }) => new URL(request.url).pathname,
 });
@@ -419,20 +432,25 @@ Client contracts are configurable too. Simple apps can use endpoint configuratio
 
 More adaptation examples live in [docs/backend-adaptation.md](docs/backend-adaptation.md).
 
-## Module Guides
+## Documentation
+
+Integration docs:
 
 - [Architecture](docs/architecture.md)
 - [Installation](docs/installation.md)
 - [Adapters](docs/adapters.md)
 - [Backend Adaptation](docs/backend-adaptation.md)
 - [Module Reference](docs/module-reference.md)
+
+Project docs:
+
 - [Roadmap](ROADMAP.md)
-- [Codex Maintenance Plan](docs/codex-maintenance.md)
 - [Releasing](docs/releasing.md)
 - [Contributing](CONTRIBUTING.md)
 - [Maintainers](MAINTAINERS.md)
 - [Security](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Codex Maintenance Plan](docs/codex-maintenance.md)
 
 ## Current Boundaries
 
