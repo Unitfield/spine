@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.3] - 2026-07-11
+
+### Fixed
+
+- Align package runtime exports with the emitted `.mjs` files and add an export-map regression test.
+
 ## [0.3.2] - 2026-07-11
 
 ### Fixed

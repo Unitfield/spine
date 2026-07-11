@@ -1,81 +1,81 @@
 {
   "name": "@eminuckan/spine",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "packageManager": "pnpm@9.15.9",
   "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.mjs"
     },
     "./server": {
       "types": "./dist/server.d.ts",
-      "import": "./dist/server.js"
+      "import": "./dist/server.mjs"
     },
     "./react-router": {
       "types": "./dist/react-router/index.d.ts",
-      "import": "./dist/react-router/index.js"
+      "import": "./dist/react-router/index.mjs"
     },
     "./react-router/server": {
       "types": "./dist/react-router/server.d.ts",
-      "import": "./dist/react-router/server.js"
+      "import": "./dist/react-router/server.mjs"
     },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
-      "import": "./dist/auth/index.js"
+      "import": "./dist/auth/index.mjs"
     },
     "./auth/server": {
       "types": "./dist/auth/server.d.ts",
-      "import": "./dist/auth/server.js"
+      "import": "./dist/auth/server.mjs"
     },
     "./access": {
       "types": "./dist/access/index.d.ts",
-      "import": "./dist/access/index.js"
+      "import": "./dist/access/index.mjs"
     },
     "./permissions": {
       "types": "./dist/permissions/index.d.ts",
-      "import": "./dist/permissions/index.js"
+      "import": "./dist/permissions/index.mjs"
     },
     "./tenant": {
       "types": "./dist/tenant/index.d.ts",
-      "import": "./dist/tenant/index.js"
+      "import": "./dist/tenant/index.mjs"
     },
     "./tenant/server": {
       "types": "./dist/tenant/server.d.ts",
-      "import": "./dist/tenant/server.js"
+      "import": "./dist/tenant/server.mjs"
     },
     "./identity": {
       "types": "./dist/identity/index.d.ts",
-      "import": "./dist/identity/index.js"
+      "import": "./dist/identity/index.mjs"
     },
     "./identity/server": {
       "types": "./dist/identity/server.d.ts",
-      "import": "./dist/identity/server.js"
+      "import": "./dist/identity/server.mjs"
     },
     "./api-client": {
       "types": "./dist/api-client/index.d.ts",
-      "import": "./dist/api-client/index.js"
+      "import": "./dist/api-client/index.mjs"
     },
     "./api-client/server": {
       "types": "./dist/api-client/server.d.ts",
-      "import": "./dist/api-client/server.js"
+      "import": "./dist/api-client/server.mjs"
     },
     "./logging": {
       "types": "./dist/logging/index.d.ts",
-      "import": "./dist/logging/index.js"
+      "import": "./dist/logging/index.mjs"
     },
     "./signalr": {
       "types": "./dist/signalr/index.d.ts",
-      "import": "./dist/signalr/index.js"
+      "import": "./dist/signalr/index.mjs"
     },
     "./query-client": {
       "types": "./dist/query-client/index.d.ts",
-      "import": "./dist/query-client/index.js"
+      "import": "./dist/query-client/index.mjs"
     }
   },
   "files": [
