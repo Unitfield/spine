@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.2] - 2026-07-11
+
+### Fixed
+
+- Use the configured public OIDC redirect URI during authorization-code exchange so callbacks remain valid behind TLS-terminating reverse proxies.
+
 ## [0.3.1] - 2026-06-01
 
 ### Changed

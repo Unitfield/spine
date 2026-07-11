@@ -264,6 +264,14 @@ function appendApplicationInitiatedActionResult(
   }
 }
 
+export function createAuthorizationResponseUrl(requestUrl: string, redirectUri: string): URL {
+  const incomingUrl = new URL(requestUrl);
+  const authorizationResponseUrl = new URL(redirectUri);
+  authorizationResponseUrl.search = incomingUrl.search;
+  authorizationResponseUrl.hash = "";
+  return authorizationResponseUrl;
+}
+
 function isAuthLoopPath(path: string): boolean {
   const normalized = path.split('#')[0].split('?')[0].replace(/\/+$/, '') || '/';
   return normalized === '/auth/logout' || normalized === '/auth/callback';
@@ -1241,7 +1249,8 @@ export async function handleCallback(request: Request): Promise<Response> {
     logger.info('Initiating token exchange');
 
     const oidcConfig = await getOAuthConfig();
-    const tokenResult = await oidc.authorizationCodeGrant(oidcConfig, url, {
+    const authorizationResponseUrl = createAuthorizationResponseUrl(request.url, config.redirectUri);
+    const tokenResult = await oidc.authorizationCodeGrant(oidcConfig, authorizationResponseUrl, {
       pkceCodeVerifier: oauthState.codeVerifier,
       expectedState: oauthState.state,
       expectedNonce: oauthState.nonce,
