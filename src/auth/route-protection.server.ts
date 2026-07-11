@@ -4,7 +4,7 @@
  * Provides route protection utilities for different authentication levels.
  */
 
-import { getUser, requireAuth, refreshTokens, login } from './auth.server';
+import { getUser, requireAuth, refreshTokens, login, logout } from './auth.server';
 import { getAuthSession } from './redis-session-storage.server';
 import type { ProtectionLevel, UserInfo } from './types';
 import { logger } from '../logging';
@@ -29,7 +29,6 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
     if (!sessionData.refreshToken || sessionData.refreshToken.length === 0) {
       if (sessionData.expiresAt && Date.now() >= sessionData.expiresAt) {
         logger.info('Token expired and no refresh token, forcing local application logout');
-        const { logout } = await import('./auth.server');
         const logoutRequest = await createAutomaticLogoutRequest(request, 'expired-no-refresh-token');
         throw await logout(logoutRequest);
       }
@@ -86,7 +85,6 @@ async function autoRefreshTokens(request: Request): Promise<void> {
 
         if (result.shouldLogout) {
           logger.error('Refresh token invalid, forcing local application logout');
-          const { logout } = await import('./auth.server');
           const logoutRequest = await createAutomaticLogoutRequest(request, 'refresh-failed');
           throw await logout(logoutRequest);
         }

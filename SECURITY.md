@@ -2,27 +2,17 @@
 
 ## Supported Versions
 
-Security fixes are applied to the latest published release line.
+Security fixes are applied to the latest published release line and the current `main` branch. Older releases are not supported.
 
 ## Reporting a Vulnerability
 
-Please do not open public GitHub issues for security problems.
+Do not open a public issue or discussion for a suspected vulnerability.
 
-Instead, report vulnerabilities privately to:
+Use [GitHub private vulnerability reporting](https://github.com/eminuckan/spine/security/advisories/new) from the repository's **Security** tab. Maintainers should coordinate investigation and remediation in a private draft security advisory.
 
-- Email: `eminuckan@gmail.com`
+Include the affected package entry point or adapter, impact, reproduction steps, affected version or revision, and any suggested mitigation. Redact credentials, tokens, session material, and application data from the report.
 
-When possible, include:
-
-- A clear description of the issue
-- Affected versions
-- Reproduction steps
-- Potential impact
-- Any suggested mitigation
-
-## Response Expectations
-
-The goal is to acknowledge reports quickly, validate impact, and coordinate a fix before public disclosure.
+We will validate the report, prioritize remediation by impact and exploitability, and coordinate disclosure after a fix is available.
 
 ## Scope Notes
 
