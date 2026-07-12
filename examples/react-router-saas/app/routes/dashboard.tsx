@@ -1,7 +1,7 @@
 import { Link, useLoaderData } from 'react-router';
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
 import type { UserInfo } from '@eminuckan/spine/auth';
-import { getActiveTenant, initializeTenant } from '~/lib/spine/tenant.server';
+import { getActiveTenant, initializeTenant } from '../lib/spine/tenant.server';
 
 interface DashboardData {
   user: Pick<UserInfo, 'sub' | 'name' | 'email'>;
