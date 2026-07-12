@@ -24,11 +24,13 @@ export default defineConfig({
   dts: false,
   clean: true,
   sourcemap: true,
-  external: [
-    'react',
-    'react-dom',
-    '@tanstack/react-query',
-  ],
+  deps: {
+    neverBundle: [
+      'react',
+      'react-dom',
+      '@tanstack/react-query',
+    ],
+  },
   // Tree-shaking
   treeshake: true,
   // React JSX

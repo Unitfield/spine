@@ -1,8 +1,6 @@
 import {
   configureIdentityAPIFetcher,
   configurePermissionFetcher,
-  contextToUserInfo,
-  getIdentityContext,
 } from '@eminuckan/spine/identity/server';
 import { getAccessToken } from '@eminuckan/spine/react-router/server';
 
@@ -38,4 +36,4 @@ configurePermissionFetcher(async (request, tenantId) => {
   return Array.isArray(payload.permissions) ? payload.permissions : [];
 });
 
-export { contextToUserInfo, getIdentityContext };
+export { contextToUserInfo, getIdentityContext } from '@eminuckan/spine/identity/server';
