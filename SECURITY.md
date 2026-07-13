@@ -8,7 +8,7 @@ Security fixes are applied to the latest published release line and the current 
 
 Do not open a public issue or discussion for a suspected vulnerability.
 
-Use [GitHub private vulnerability reporting](https://github.com/eminuckan/spine/security/advisories/new) from the repository's **Security** tab. Maintainers should coordinate investigation and remediation in a private draft security advisory.
+Use [GitHub private vulnerability reporting](https://github.com/Unitfield/spine/security/advisories/new) from the repository's **Security** tab. Maintainers should coordinate investigation and remediation in a private draft security advisory.
 
 Include the affected package entry point or adapter, impact, reproduction steps, affected version or revision, and any suggested mitigation. Redact credentials, tokens, session material, and application data from the report.
 

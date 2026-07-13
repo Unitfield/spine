@@ -1,6 +1,6 @@
 # Spine
 
-[![CI](https://github.com/eminuckan/spine/actions/workflows/ci.yml/badge.svg)](https://github.com/eminuckan/spine/actions/workflows/ci.yml)
+[![CI](https://github.com/Unitfield/spine/actions/workflows/ci.yml/badge.svg)](https://github.com/Unitfield/spine/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/%40eminuckan%2Fspine.svg)](https://www.npmjs.com/package/@eminuckan/spine)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

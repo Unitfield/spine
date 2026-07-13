@@ -4,7 +4,7 @@ This is the maintainer-facing application packet for the Codex for Open Source p
 
 ## Repository
 
-- GitHub: `https://github.com/eminuckan/spine`
+- GitHub: `https://github.com/Unitfield/spine`
 - npm: `https://www.npmjs.com/package/@eminuckan/spine`
 - Package: `@eminuckan/spine`
 - License: MIT
