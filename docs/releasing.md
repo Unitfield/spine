@@ -29,14 +29,14 @@ Update the version in `package.json` and add a changelog entry.
 If the repository does not exist yet:
 
 ```bash
-gh repo create eminuckan/spine --public --source=. --remote=origin --push
+gh repo create Unitfield/spine --public --source=. --remote=origin --push
 ```
 
 Useful follow-up commands:
 
 ```bash
-gh repo edit eminuckan/spine --description "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access."
-gh repo edit eminuckan/spine --homepage "https://github.com/eminuckan/spine#readme"
+gh repo edit Unitfield/spine --description "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access."
+gh repo edit Unitfield/spine --homepage "https://github.com/Unitfield/spine#readme"
 ```
 
 ## npm Publishing

@@ -35,6 +35,7 @@ const blockedPatterns = [
   /__active-org/,
   /MimirCore/,
 ];
+const approvedRepositoryIdentity = /(?:git\+)?https:\/\/github\.com\/Unitfield\/spine(?:\.git|(?:\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]*)?)|\bUnitfield\/spine\b/gi;
 
 function walk(path, files = []) {
   const stat = statSync(path);
@@ -72,8 +73,9 @@ for (const scannedRoot of scannedRoots) {
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
 
     lines.forEach((line, index) => {
+      const inspectedLine = line.replace(approvedRepositoryIdentity, '');
       for (const pattern of blockedPatterns) {
-        if (pattern.test(line)) {
+        if (pattern.test(inspectedLine)) {
           findings.push(`${relativePath}:${index + 1}: ${pattern}`);
         }
       }

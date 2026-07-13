@@ -163,13 +163,13 @@
     "typescript",
     "zustand"
   ],
-  "homepage": "https://github.com/eminuckan/spine#readme",
+  "homepage": "https://github.com/Unitfield/spine#readme",
   "bugs": {
-    "url": "https://github.com/eminuckan/spine/issues"
+    "url": "https://github.com/Unitfield/spine/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/eminuckan/spine.git"
+    "url": "git+https://github.com/Unitfield/spine.git"
   },
   "author": "Muhammet Emin Uckan <eminuckan@gmail.com>",
   "license": "MIT",

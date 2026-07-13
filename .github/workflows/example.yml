@@ -1,0 +1,70 @@
+name: React Router example
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - examples/react-router-saas/**
+      - package.json
+      - pnpm-lock.yaml
+      - tsconfig.json
+      - tsdown.config.ts
+      - .github/workflows/example.yml
+  pull_request:
+    paths:
+      - src/**
+      - examples/react-router-saas/**
+      - package.json
+      - pnpm-lock.yaml
+      - tsconfig.json
+      - tsdown.config.ts
+      - .github/workflows/example.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spine-example-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-example:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/react-router-saas/pnpm-lock.yaml
+
+      - name: Install package dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Install example dependencies
+        working-directory: examples/react-router-saas
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check example
+        working-directory: examples/react-router-saas
+        run: pnpm typecheck
+
+      - name: Build example
+        working-directory: examples/react-router-saas
+        run: pnpm build
