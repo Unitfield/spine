@@ -208,7 +208,12 @@ export type PublicAuthorizationStateContext = Record<
  * Login options
  */
 export interface LoginOptions {
-  /** Return URL after successful login */
+  /**
+   * Return URL after successful login.
+   *
+   * Spine accepts local paths and same-origin absolute URLs, which are stored
+   * as local paths. Unsafe or malformed destinations fall back to `/`.
+   */
   returnUrl?: string;
   /** OAuth prompt parameter (none, login, consent, select_account, create) */
   prompt?: 'none' | 'login' | 'consent' | 'select_account' | 'create';

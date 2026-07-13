@@ -47,6 +47,10 @@ import {
   buildAuthorizationState,
   sanitizeExtraAuthorizationParameters,
 } from './authorization-parameters';
+import {
+  sanitizeOAuthReturnUrl,
+  serializeTemporaryAuthCookie,
+} from './oauth-security';
 
 type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
 type LogoutScope = 'identity' | 'local' | 'all';
@@ -208,31 +212,6 @@ function canUseIdTokenHint(idToken: string | undefined, expectedIssuer: string):
   return tokenIssuer !== null && tokenIssuer === normalizeIssuer(expectedIssuer);
 }
 
-function sanitizeLogoutReturnUrl(returnUrl: string | null, request: Request): string | null {
-  if (!returnUrl) {
-    return null;
-  }
-
-  try {
-    const requestUrl = new URL(request.url);
-    const decodedReturnUrl = decodeURIComponent(returnUrl);
-
-    if (decodedReturnUrl.startsWith('/') && !decodedReturnUrl.startsWith('//')) {
-      return isAuthLoopPath(decodedReturnUrl) ? null : decodedReturnUrl;
-    }
-
-    const candidateUrl = new URL(decodedReturnUrl);
-    if (candidateUrl.origin !== requestUrl.origin) {
-      return null;
-    }
-
-    const sameOriginPath = `${candidateUrl.pathname}${candidateUrl.search}${candidateUrl.hash}`;
-    return isAuthLoopPath(sameOriginPath) ? null : sameOriginPath;
-  } catch {
-    return null;
-  }
-}
-
 function appendApplicationInitiatedActionResult(
   returnUrl: string,
   action: string | null | undefined,
@@ -270,11 +249,6 @@ export function createAuthorizationResponseUrl(requestUrl: string, redirectUri: 
   authorizationResponseUrl.search = incomingUrl.search;
   authorizationResponseUrl.hash = "";
   return authorizationResponseUrl;
-}
-
-function isAuthLoopPath(path: string): boolean {
-  const normalized = path.split('#')[0].split('?')[0].replace(/\/+$/, '') || '/';
-  return normalized === '/auth/logout' || normalized === '/auth/callback';
 }
 
 function isLocalInsecureIssuer(authority: string): boolean {
@@ -883,6 +857,7 @@ async function createSessionData(
 const AUTH_ERROR_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error`;
 const AUTH_ERROR_DESC_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error_desc`;
 const OAUTH_STATE_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_oauth_state_id`;
+const LOGOUT_RETURN_URL_COOKIE = 'logout_return_url';
 
 /**
  * Check if there's an auth error in cookies
@@ -931,8 +906,14 @@ export function getAuthError(request: Request): AuthError | null {
  */
 export function clearAuthErrorHeaders(): Headers {
   const headers = new Headers();
-  headers.append('Set-Cookie', `${AUTH_ERROR_COOKIE}=; Path=/; Max-Age=0`);
-  headers.append('Set-Cookie', `${AUTH_ERROR_DESC_COOKIE}=; Path=/; Max-Age=0`);
+  headers.append(
+    'Set-Cookie',
+    serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, '', { maxAge: 0 }),
+  );
+  headers.append(
+    'Set-Cookie',
+    serializeTemporaryAuthCookie(AUTH_ERROR_DESC_COOKIE, '', { maxAge: 0 }),
+  );
   return headers;
 }
 
@@ -965,6 +946,7 @@ export async function login(
     const options: LoginOptions = typeof returnUrlOrOptions === 'string' 
       ? { returnUrl: returnUrlOrOptions }
       : returnUrlOrOptions || {};
+    const returnUrl = sanitizeOAuthReturnUrl(options.returnUrl, request) ?? '/';
 
     // Check for auth_error cookie to prevent redirect loops
     const cookies = request.headers.get('Cookie');
@@ -973,7 +955,10 @@ export async function login(
       logger.warn('Auth error cookie detected, preventing redirect loop');
       // Clear the error cookie and redirect to home
       const headers = new Headers();
-      headers.append('Set-Cookie', `${AUTH_ERROR_COOKIE}=; Path=/; Max-Age=0`);
+      headers.append(
+        'Set-Cookie',
+        serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, '', { maxAge: 0 }),
+      );
       // Use redirectUri to get correct base URL with port
       const redirectUri = new URL(config.redirectUri);
       const baseUrl = redirectUri.origin;
@@ -999,15 +984,15 @@ export async function login(
       state,
       codeVerifier,
       nonce,
-      returnUrl: options.returnUrl,
+      returnUrl,
       kcAction: options.kcAction,
       createdAt: Date.now(),
     };
 
     logger.info('Creating OAuth state', {
-      returnUrl: options.returnUrl,
+      hasReturnUrl: Boolean(options.returnUrl),
       prompt: options.prompt,
-      kcAction: options.kcAction,
+      hasKcAction: Boolean(options.kcAction),
       extraAuthParamKeys: Object.keys(extraAuthParams),
     });
 
@@ -1036,21 +1021,26 @@ export async function login(
 
     // Store stateId in cookie for callback (app-specific to prevent conflicts)
     const headers = new Headers();
-    headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+    headers.append(
+      'Set-Cookie',
+      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, stateId, { maxAge: 600 }),
+    );
 
     logger.info('OIDC authorization flow initiated', {
       clientId: config.clientId,
       redirectUri: config.redirectUri,
       scope: config.scope,
       authorizationEndpoint: oidcConfig.serverMetadata().authorization_endpoint,
-      stateId,
+      hasStateId: true,
       prompt: options.prompt,
-      kcAction: options.kcAction,
+      hasKcAction: Boolean(options.kcAction),
     });
 
     return createRedirectResponse(authorizationUrl.toString(), { headers });
   } catch (error) {
-    logger.error('Failed to initiate OAuth login', error instanceof Error ? error : undefined);
+    logger.error('Failed to initiate OAuth login', undefined, {
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
     throw new Error('Login failed');
   }
 }
@@ -1082,10 +1072,10 @@ export async function handleCallback(request: Request): Promise<Response> {
     logger.info('OIDC callback received', {
       hasCode: !!code,
       hasState: !!state,
-      error,
-      errorDescription,
-      kcAction,
-      kcActionStatus,
+      hasError: Boolean(error),
+      hasErrorDescription: Boolean(errorDescription),
+      hasKcAction: Boolean(kcAction),
+      hasKcActionStatus: Boolean(kcActionStatus),
       clientId: config.clientId,
       redirectUri: config.redirectUri
     });
@@ -1105,19 +1095,22 @@ export async function handleCallback(request: Request): Promise<Response> {
           if (oauthState && oauthState.state === state && stateAge <= 10 * 60 * 1000) {
             await deleteOAuthState(stateId);
             const headers = new Headers();
-            headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+            headers.append(
+              'Set-Cookie',
+              serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
+            );
 
             const redirectUrl = appendApplicationInitiatedActionResult(
-              oauthState.returnUrl || '/',
+              sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
               kcAction || oauthState.kcAction,
               kcActionStatus
             );
 
             logger.info('Application initiated action returned with OAuth error', {
-              error,
-              errorDescription,
-              kcAction: kcAction || oauthState.kcAction,
-              kcActionStatus,
+              hasError: Boolean(error),
+              hasErrorDescription: Boolean(errorDescription),
+              hasKcAction: Boolean(kcAction || oauthState.kcAction),
+              hasKcActionStatus: Boolean(kcActionStatus),
             });
 
             return createRedirectResponse(redirectUrl, { headers });
@@ -1126,8 +1119,8 @@ export async function handleCallback(request: Request): Promise<Response> {
       }
 
       logger.error('OAuth callback error', undefined, { 
-        error, 
-        errorDescription,
+        hasError: Boolean(error),
+        hasErrorDescription: Boolean(errorDescription),
         clientId: config.clientId,
         applicationType: config.applicationType,
         hasLandingPage
@@ -1144,11 +1137,15 @@ export async function handleCallback(request: Request): Promise<Response> {
         // 2. Allow UI to show appropriate message (auth_error_type, auth_error_description)
         headers.append(
           'Set-Cookie',
-          `${AUTH_ERROR_COOKIE}=access_denied; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
+          serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, 'access_denied', { maxAge: 300 }),
         );
         headers.append(
           'Set-Cookie',
-          `${AUTH_ERROR_DESC_COOKIE}=${encodeURIComponent(errorDescription || 'You do not have access to this application.')}; Path=/; SameSite=Lax; Max-Age=300`
+          serializeTemporaryAuthCookie(
+            AUTH_ERROR_DESC_COOKIE,
+            errorDescription || 'You do not have access to this application.',
+            { maxAge: 300 },
+          ),
         );
         // Use redirectUri to get the correct base URL with port
         // request.url.origin can lose the port in some cases
@@ -1178,12 +1175,12 @@ export async function handleCallback(request: Request): Promise<Response> {
       const headers = await destroyAuthSession(request);
       headers.append(
         'Set-Cookie',
-        `${AUTH_ERROR_COOKIE}=${encodeURIComponent(error)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
+        serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, error, { maxAge: 300 }),
       );
       if (errorDescription) {
         headers.append(
           'Set-Cookie',
-          `${AUTH_ERROR_DESC_COOKIE}=${encodeURIComponent(errorDescription)}; Path=/; SameSite=Lax; Max-Age=300`
+          serializeTemporaryAuthCookie(AUTH_ERROR_DESC_COOKIE, errorDescription, { maxAge: 300 }),
         );
       }
       // Use redirectUri to get correct base URL with port
@@ -1227,17 +1224,20 @@ export async function handleCallback(request: Request): Promise<Response> {
       if (kcActionStatus) {
         await deleteOAuthState(stateId);
         const headers = new Headers();
-        headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+        headers.append(
+          'Set-Cookie',
+          serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
+        );
 
         const redirectUrl = appendApplicationInitiatedActionResult(
-          oauthState.returnUrl || '/',
+          sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
           kcAction || oauthState.kcAction,
           kcActionStatus
         );
 
         logger.info('Application initiated action returned without authorization code', {
-          kcAction: kcAction || oauthState.kcAction,
-          kcActionStatus,
+          hasKcAction: Boolean(kcAction || oauthState.kcAction),
+          hasKcActionStatus: Boolean(kcActionStatus),
         });
 
         return createRedirectResponse(redirectUrl, { headers });
@@ -1272,19 +1272,24 @@ export async function handleCallback(request: Request): Promise<Response> {
 
     // Combine headers and clear OAuth state cookie (app-specific)
     const headers = new Headers(sessionHeaders);
-    headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    headers.append(
+      'Set-Cookie',
+      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
+    );
 
     logger.info('OAuth callback processed successfully');
 
     // Redirect to return URL or default location
     const redirectUrl = appendApplicationInitiatedActionResult(
-      oauthState.returnUrl || '/',
+      sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
       kcAction || oauthState.kcAction,
       kcActionStatus
     );
     return createRedirectResponse(redirectUrl, { headers });
   } catch (error) {
-    logger.error('OAuth callback failed', error instanceof Error ? error : undefined);
+    logger.error('OAuth callback failed', undefined, {
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
 
     // Try to clean up OAuth state on error
     try {
@@ -1318,7 +1323,7 @@ export async function logout(request: Request): Promise<Response> {
     const url = new URL(request.url);
     
     const logoutScope = getLogoutScope(url);
-    const returnUrl = sanitizeLogoutReturnUrl(url.searchParams.get('returnUrl'), request);
+    const returnUrl = sanitizeOAuthReturnUrl(url.searchParams.get('returnUrl'), request);
     
     logger.info('Logout initiated', { 
       clientId: config.clientId,
@@ -1336,8 +1341,11 @@ export async function logout(request: Request): Promise<Response> {
       const redirectUrl = returnUrl || '/';
       const absoluteRedirectUrl = getAbsoluteRedirectUrl(request, redirectUrl);
 
-      headers.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
-      logger.info('Local application logout completed', { redirectUrl: absoluteRedirectUrl });
+      headers.append(
+        'Set-Cookie',
+        serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, '', { maxAge: 0 }),
+      );
+      logger.info('Local application logout completed', { hasReturnUrl: Boolean(returnUrl) });
       return createRedirectResponse(absoluteRedirectUrl, { headers });
     }
 
@@ -1345,7 +1353,10 @@ export async function logout(request: Request): Promise<Response> {
 
     if (logoutScope === 'all' && sessionData.userId) {
       await revokeAndDestroyAllUserSessionsBestEffort(sessionData.userId);
-      sessionHeaders.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      sessionHeaders.append(
+        'Set-Cookie',
+        serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, '', { maxAge: 0 }),
+      );
       const expiredHeaders = await destroyAuthSession(request);
       expiredHeaders.forEach((value, key) => sessionHeaders.append(key, value));
     } else {
@@ -1360,10 +1371,13 @@ export async function logout(request: Request): Promise<Response> {
     if (returnUrl) {
       headers.append(
         'Set-Cookie',
-        `logout_return_url=${encodeURIComponent(returnUrl)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
+        serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, returnUrl, { maxAge: 300 }),
       );
     } else {
-      headers.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      headers.append(
+        'Set-Cookie',
+        serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, '', { maxAge: 0 }),
+      );
     }
 
     try {
@@ -1403,7 +1417,7 @@ export async function logout(request: Request): Promise<Response> {
     const registeredPath = config.postLogoutRedirectUri || '/';
     const finalRedirectUrl = getAbsoluteRedirectUrl(request, registeredPath);
 
-    logger.info('Logout completed', { redirectUrl: finalRedirectUrl });
+    logger.info('Logout completed', { hasConfiguredRedirect: Boolean(config.postLogoutRedirectUri) });
     return createRedirectResponse(finalRedirectUrl, { headers });
   } catch (error) {
     logger.error('Logout failed', error instanceof Error ? error : undefined);
@@ -1533,7 +1547,7 @@ export async function requireAuth(request: Request): Promise<UserInfo> {
   if (!user) {
     const url = new URL(request.url);
     const returnUrl = `${url.pathname}${url.search}`;
-    logger.info('No user found, starting OAuth flow', { returnUrl });
+    logger.info('No user found, starting OAuth flow', { hasReturnUrl: true });
     throw await login(request, returnUrl);
   }
 

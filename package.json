@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/spine",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
   "main": "./dist/index.mjs",

@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.4] - 2026-07-13
+
+### Security
+
+- Restrict OAuth return targets to safe same-origin application paths and revalidate stored state during callbacks.
+- Redact invitation tokens and OAuth callback details from authentication logs.
+- Mark temporary production OAuth cookies as Secure, HttpOnly, and SameSite=Lax.
+
 ## [0.3.3] - 2026-07-11
 
 ### Fixed
