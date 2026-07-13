@@ -12,7 +12,7 @@
     "@eminuckan/spine": "file:../..",
     "@react-router/node": "^7.9.4",
     "@react-router/serve": "^7.9.4",
-    "@tanstack/react-query": "^5.90.0",
+    "@tanstack/react-query": "^5.101.2",
     "isbot": "^5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
