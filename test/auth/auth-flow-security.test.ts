@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     createOAuthState: vi.fn(async () => 'state-id'),
     getOAuthState: vi.fn(),
     deleteOAuthState: vi.fn(async () => undefined),
+    jwtVerify: vi.fn(),
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -29,6 +30,7 @@ const mocks = vi.hoisted(() => {
       serverMetadata: vi.fn(() => ({
         issuer: 'https://identity.unitfield.com/realms/unitfield',
         authorization_endpoint: 'https://identity.unitfield.com/authorize',
+        jwks_uri: 'https://identity.unitfield.com/realms/unitfield/protocol/openid-connect/certs',
       })),
     },
   };
@@ -52,6 +54,16 @@ vi.mock('../../src/auth/redis-session-storage.server', () => ({
 
 vi.mock('../../src/logging', () => ({ logger: mocks.logger }));
 
+vi.mock('jose', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('jose')>();
+
+  return {
+    ...actual,
+    createRemoteJWKSet: vi.fn(() => vi.fn()),
+    jwtVerify: mocks.jwtVerify,
+  };
+});
+
 vi.mock('openid-client', () => ({
   ResponseBodyError: class ResponseBodyError extends Error {},
   allowInsecureRequests: Symbol('allowInsecureRequests'),
@@ -70,10 +82,12 @@ vi.mock('openid-client', () => ({
 
 import {
   clearAuthServerCache,
+  handleBackChannelLogout,
   handleCallback,
   login,
   logout,
 } from '../../src/auth/auth.server';
+import { errors as joseErrors } from 'jose';
 
 function serializedLogCalls(): string {
   return JSON.stringify(Object.values(mocks.logger).flatMap((log) => log.mock.calls));
@@ -84,6 +98,13 @@ beforeEach(() => {
   clearAuthServerCache();
   mocks.createOAuthState.mockResolvedValue('state-id');
   mocks.destroyAuthSession.mockResolvedValue(new Headers());
+  mocks.destroyAuthSessionsByIdentitySession.mockResolvedValue(0);
+  mocks.jwtVerify.mockReset();
+  mocks.oidcConfiguration.serverMetadata.mockReturnValue({
+    issuer: 'https://identity.unitfield.com/realms/unitfield',
+    authorization_endpoint: 'https://identity.unitfield.com/authorize',
+    jwks_uri: 'https://identity.unitfield.com/realms/unitfield/protocol/openid-connect/certs',
+  });
 });
 
 describe('OAuth flow security boundaries', () => {
@@ -190,5 +211,131 @@ describe('OAuth flow security boundaries', () => {
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
     expect(response.headers.get('set-cookie')).toContain('Secure');
     expect(serializedLogCalls()).not.toContain(returnToken);
+  });
+});
+
+describe('OIDC back-channel logout telemetry', () => {
+  function createLogoutRequest(logoutToken = 'logout-token'): Request {
+    return new Request('https://app.unitfield.com/auth/backchannel-logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ logout_token: logoutToken }),
+    });
+  }
+
+  it('returns 400 and warns for a malformed untrusted logout token', async () => {
+    mocks.jwtVerify.mockRejectedValue(new joseErrors.JWSInvalid('Invalid Compact JWS'));
+
+    const response = await handleBackChannelLogout(createLogoutRequest('invalid'));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'invalid_logout_token',
+      error_description: 'Invalid Compact JWS',
+    });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'Back-channel logout token rejected',
+      expect.objectContaining({ errorCode: 'ERR_JWS_INVALID' }),
+    );
+    expect(mocks.logger.error).not.toHaveBeenCalledWith(
+      'Back-channel logout failed',
+      expect.anything(),
+    );
+  });
+
+  it('returns 400 and warns when verified logout claims violate the protocol', async () => {
+    mocks.jwtVerify.mockResolvedValue({
+      payload: {
+        iss: 'https://identity.unitfield.com/realms/unitfield',
+        aud: 'unitfield-app',
+        sid: 'identity-session-id',
+      },
+      protectedHeader: { alg: 'RS256' },
+    });
+
+    const response = await handleBackChannelLogout(createLogoutRequest());
+
+    expect(response.status).toBe(400);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'Back-channel logout token rejected',
+      expect.objectContaining({
+        error: expect.stringContaining('missing back-channel logout event'),
+      }),
+    );
+    expect(mocks.logger.error).not.toHaveBeenCalledWith(
+      'Back-channel logout failed',
+      expect.anything(),
+    );
+  });
+
+  it('keeps provider configuration failures at error level', async () => {
+    mocks.oidcConfiguration.serverMetadata.mockReturnValue({
+      issuer: 'https://identity.unitfield.com/realms/unitfield',
+      authorization_endpoint: 'https://identity.unitfield.com/authorize',
+    });
+
+    const response = await handleBackChannelLogout(createLogoutRequest());
+
+    expect(response.status).toBe(400);
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'Back-channel logout failed',
+      expect.objectContaining({ message: 'OIDC provider does not expose jwks_uri' }),
+    );
+    expect(mocks.logger.warn).not.toHaveBeenCalledWith(
+      'Back-channel logout token rejected',
+      expect.anything(),
+    );
+  });
+
+  it('keeps provider JWKS availability failures at error level', async () => {
+    mocks.jwtVerify.mockRejectedValue(new joseErrors.JWKSTimeout('JWKS request timed out'));
+
+    const response = await handleBackChannelLogout(createLogoutRequest());
+
+    expect(response.status).toBe(400);
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'Back-channel logout failed',
+      expect.objectContaining({
+        code: 'ERR_JWKS_TIMEOUT',
+        message: 'JWKS request timed out',
+      }),
+    );
+    expect(mocks.logger.warn).not.toHaveBeenCalledWith(
+      'Back-channel logout token rejected',
+      expect.anything(),
+    );
+  });
+
+  it('preserves successful session cleanup and response behavior', async () => {
+    mocks.jwtVerify.mockResolvedValue({
+      payload: {
+        iss: 'https://identity.unitfield.com/realms/unitfield',
+        aud: 'unitfield-app',
+        sid: 'identity-session-id',
+        events: {
+          'http://schemas.openid.net/event/backchannel-logout': {},
+        },
+      },
+      protectedHeader: { alg: 'RS256' },
+    });
+    mocks.destroyAuthSessionsByIdentitySession.mockResolvedValue(2);
+
+    const response = await handleBackChannelLogout(createLogoutRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      destroyedSessions: 2,
+      issuer: 'https://identity.unitfield.com/realms/unitfield',
+      sid: 'identity-session-id',
+    });
+    expect(mocks.destroyAuthSessionsByIdentitySession).toHaveBeenCalledWith({
+      sid: 'identity-session-id',
+      userId: undefined,
+    });
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'Back-channel logout processed',
+      expect.objectContaining({ destroyedSessions: 2 }),
+    );
   });
 });
