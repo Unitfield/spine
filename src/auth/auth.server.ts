@@ -10,7 +10,7 @@
  */
 
 import * as oidc from 'openid-client';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, errors as joseErrors, jwtVerify } from 'jose';
 
 import {
   createAuthSession,
@@ -175,6 +175,33 @@ let authServerCache: {
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+const INVALID_LOGOUT_TOKEN_JOSE_ERROR_CODES = new Set([
+  joseErrors.JOSEAlgNotAllowed.code,
+  joseErrors.JOSENotSupported.code,
+  joseErrors.JWKSNoMatchingKey.code,
+  joseErrors.JWSInvalid.code,
+  joseErrors.JWSSignatureVerificationFailed.code,
+  joseErrors.JWTClaimValidationFailed.code,
+  joseErrors.JWTExpired.code,
+  joseErrors.JWTInvalid.code,
+]);
+
+class InvalidBackChannelLogoutTokenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidBackChannelLogoutTokenError';
+  }
+}
+
+function isInvalidBackChannelLogoutTokenError(error: unknown): boolean {
+  if (error instanceof InvalidBackChannelLogoutTokenError) {
+    return true;
+  }
+
+  return error instanceof joseErrors.JOSEError &&
+    INVALID_LOGOUT_TOKEN_JOSE_ERROR_CODES.has(error.code);
+}
 
 function normalizeIssuer(value: string | undefined): string | null {
   const normalized = value?.trim().replace(/\/+$/, '');
@@ -515,11 +542,15 @@ function validateBackChannelLogoutClaims(payload: Record<string, unknown>, clien
     'http://schemas.openid.net/event/backchannel-logout' in events;
 
   if (!hasBackChannelEvent) {
-    throw new Error('Invalid back-channel logout token: missing back-channel logout event');
+    throw new InvalidBackChannelLogoutTokenError(
+      'Invalid back-channel logout token: missing back-channel logout event'
+    );
   }
 
   if ('nonce' in payload) {
-    throw new Error('Invalid back-channel logout token: nonce is not allowed');
+    throw new InvalidBackChannelLogoutTokenError(
+      'Invalid back-channel logout token: nonce is not allowed'
+    );
   }
 
   const audience = payload.aud;
@@ -528,14 +559,18 @@ function validateBackChannelLogoutClaims(payload: Record<string, unknown>, clien
     : audience === clientId;
 
   if (!hasClientAudience) {
-    throw new Error('Invalid back-channel logout token: audience mismatch');
+    throw new InvalidBackChannelLogoutTokenError(
+      'Invalid back-channel logout token: audience mismatch'
+    );
   }
 
   const subject = typeof payload.sub === 'string' ? payload.sub : undefined;
   const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
 
   if (!subject && !sid) {
-    throw new Error('Invalid back-channel logout token: subject or sid is required');
+    throw new InvalidBackChannelLogoutTokenError(
+      'Invalid back-channel logout token: subject or sid is required'
+    );
   }
 
   return {
@@ -1474,7 +1509,15 @@ export async function handleBackChannelLogout(request: Request): Promise<Respons
     logger.info('Back-channel logout processed', { ...result });
     return Response.json({ success: true, ...result });
   } catch (error) {
-    logger.error('Back-channel logout failed', error instanceof Error ? error : undefined);
+    if (isInvalidBackChannelLogoutTokenError(error)) {
+      logger.warn('Back-channel logout token rejected', {
+        error: getOAuthErrorMessage(error),
+        errorCode: error instanceof joseErrors.JOSEError ? error.code : undefined,
+      });
+    } else {
+      logger.error('Back-channel logout failed', error instanceof Error ? error : undefined);
+    }
+
     return Response.json(
       { error: 'invalid_logout_token', error_description: getOAuthErrorMessage(error) },
       { status: 400 }
