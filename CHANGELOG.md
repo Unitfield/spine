@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.5] - 2026-07-14
+
+### Fixed
+
+- Classify malformed or unverifiable back-channel logout tokens as expected client warnings while preserving error-level reporting for provider, discovery, JWKS, and configuration failures.
+
 ## [0.3.4] - 2026-07-13
 
 ### Security
