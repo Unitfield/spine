@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.6] - 2026-07-14
+
+### Fixed
+
+- Carry forward the back-channel logout telemetry classification prepared in 0.3.5, which was not published after npm rejected provenance from a self-hosted release runner.
+- Run npm trusted publishing on a GitHub-hosted Ubuntu runner and upgrade the release checkout action to v7 so provenance satisfies npm's supported-provider requirements.
+
 ## [0.3.5] - 2026-07-14
 
 ### Fixed
