@@ -25,6 +25,14 @@
       "types": "./dist/react-router/server.d.ts",
       "import": "./dist/react-router/server.mjs"
     },
+    "./tanstack-start": {
+      "types": "./dist/tanstack-start/index.d.ts",
+      "import": "./dist/tanstack-start/index.mjs"
+    },
+    "./tanstack-start/server": {
+      "types": "./dist/tanstack-start/server.d.ts",
+      "import": "./dist/tanstack-start/server.mjs"
+    },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.mjs"

@@ -6,6 +6,8 @@ export default defineConfig({
     server: 'src/server.ts',
     'react-router/index': 'src/react-router/index.ts',
     'react-router/server': 'src/react-router/server.ts',
+    'tanstack-start/index': 'src/tanstack-start/index.ts',
+    'tanstack-start/server': 'src/tanstack-start/server.ts',
     'auth/index': 'src/auth/index.ts',
     'auth/server': 'src/auth/server.ts',
     'access/index': 'src/access/index.ts',
