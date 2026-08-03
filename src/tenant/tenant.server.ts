@@ -150,6 +150,15 @@ export async function setCurrentTenant(
       return { headers: new Headers(), success: false, error: 'No active session' };
     }
 
+    const availableTenants = await getAvailableTenants(request);
+    if (!availableTenants.includes(tenantId)) {
+      return {
+        headers: new Headers(),
+        success: false,
+        error: 'Tenant is not available for the active user',
+      };
+    }
+
     const cookieValue = await setActiveTenant(tenantId);
     const headers = new Headers();
     headers.append('Set-Cookie', cookieValue);

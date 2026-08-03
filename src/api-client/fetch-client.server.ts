@@ -11,6 +11,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import type {
   APIClientError,
   APIConfig,
@@ -56,7 +57,8 @@ const rawResponseStore = new AsyncLocalStorage<Map<string, RuntimeApiResponse<un
 
 function getSessionKeyFromRequest(request: Request): string {
   const cookie = request.headers.get('cookie') || '';
-  return `session:${cookie.slice(0, 50)}`;
+  const fingerprint = createHash('sha256').update(cookie).digest('hex');
+  return `session:${fingerprint}`;
 }
 
 function getOrCreateRefreshPromise(
