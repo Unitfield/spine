@@ -66,4 +66,26 @@ describe('setCurrentTenant', () => {
     await expect(getCurrentTenant(request)).resolves.toBe('tenant-b');
     await expect(isTenantMember(request, 'tenant-a')).resolves.toBe(true);
   });
+
+  it('breaks recursive identity fetcher tenant resolution and rejects a forged selector', async () => {
+    const request = new Request('https://app.example.test/api/tenant/data', {
+      headers: { Cookie: '__spine_tenant=tenant-forged' },
+    });
+    let fetcherCalls = 0;
+    let nestedTenant: string | null | undefined;
+
+    configureIdentityContextFetcher(async (fetchRequest) => {
+      fetcherCalls += 1;
+      nestedTenant = await getCurrentTenant(fetchRequest);
+      return {
+        memberships: [{ tenantId: 'tenant-authorized' }],
+      };
+    });
+
+    await expect(getCurrentTenant(request)).resolves.toBeNull();
+    expect(nestedTenant).toBeNull();
+    expect(fetcherCalls).toBe(1);
+    await expect(isTenantMember(request, 'tenant-forged')).resolves.toBe(false);
+    await expect(isTenantMember(request, 'tenant-authorized')).resolves.toBe(true);
+  });
 });

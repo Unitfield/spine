@@ -114,4 +114,52 @@ describe('createAPIConfigFactory', () => {
     expect(config.tenantId).toBe('');
     expect(config.headers['X-Resolved-Tenant']).toBe('none');
   });
+
+  it('removes a raw tenant header when no tenant was validated', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => null,
+      undefined,
+      {
+        buildHeaders: () => ({
+          'x-tenant-id': 'forged-by-builder',
+        }),
+      },
+    );
+
+    const config = await createAPIConfig(new Request('https://app.example.test'), {
+      requireTenant: false,
+      customHeaders: {
+        'X-Tenant-Id': 'forged-by-caller',
+      },
+    });
+
+    expect(config.tenantId).toBe('');
+    expect(config.headers['X-Tenant-Id']).toBeUndefined();
+    expect(config.headers['x-tenant-id']).toBeUndefined();
+  });
+
+  it('reasserts the validated tenant after custom headers and builders run', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => 'tenant-authorized',
+      undefined,
+      {
+        buildHeaders: () => ({
+          'X-Tenant-Id': 'forged-by-builder',
+          'x-tenant-id': 'forged-by-builder-case-variant',
+        }),
+      },
+    );
+
+    const config = await createAPIConfig(new Request('https://app.example.test'), {
+      customHeaders: {
+        'x-tenant-id': 'forged-by-caller',
+      },
+    });
+
+    expect(config.tenantId).toBe('tenant-authorized');
+    expect(config.headers['X-Tenant-Id']).toBe('tenant-authorized');
+    expect(config.headers['x-tenant-id']).toBeUndefined();
+  });
 });

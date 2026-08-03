@@ -121,6 +121,26 @@ export function createAPIConfigFactory(
       : undefined
   );
 
+  function finalizeTenantHeader(
+    headers: Record<string, string>,
+    tenantId: string | null,
+  ): void {
+    if (!tenantHeaderName) {
+      return;
+    }
+
+    const normalizedTenantHeaderName = tenantHeaderName.toLowerCase();
+    for (const headerName of Object.keys(headers)) {
+      if (headerName.toLowerCase() === normalizedTenantHeaderName) {
+        delete headers[headerName];
+      }
+    }
+
+    if (tenantId) {
+      headers[tenantHeaderName] = tenantId;
+    }
+  }
+
   /**
    * Resolve tenant ID from request or options
    */
@@ -260,10 +280,6 @@ export function createAPIConfigFactory(
         headers[tenantHeaderName] = tenantId;
       }
       logger?.debug?.('Added tenant context header', { tenantId });
-    } else if (tenantHeaderName && options.tenantId) {
-      // Do not let a raw custom header preserve an unvalidated selector after
-      // tenant resolution failed.
-      delete headers[tenantHeaderName];
     }
 
     if (buildHeaders) {
@@ -280,6 +296,11 @@ export function createAPIConfigFactory(
         requireTenant,
       }));
     }
+
+    // Tenant selectors are never authorization evidence. Reconcile the
+    // authoritative header after every custom merge so neither customHeaders
+    // nor buildHeaders can introduce an unvalidated or conflicting value.
+    finalizeTenantHeader(headers, tenantId);
 
     logger?.debug?.('API config created', {
       basePath: baseURL,
