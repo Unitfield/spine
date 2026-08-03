@@ -46,4 +46,72 @@ describe('createAPIConfigFactory', () => {
     expect(config.headers.Authorization).toBeUndefined();
     expect(config.headers['X-Tenant-Id']).toBeUndefined();
   });
+
+  it('rejects an explicit tenant override outside current membership', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => 'tenant-a',
+      undefined,
+      {
+        validateTenant: async (_request, tenantId) => tenantId === 'tenant-a',
+      },
+    );
+
+    await expect(createAPIConfig(new Request('https://app.example.test'), {
+      tenantId: 'tenant-forged',
+    })).rejects.toThrow('Tenant context is required for this operation');
+  });
+
+  it('accepts an explicitly selected tenant after membership validation', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => 'tenant-a',
+      undefined,
+      {
+        tenantHeaderName: 'X-Workspace-Id',
+        validateTenant: async (_request, tenantId) => ['tenant-a', 'tenant-b'].includes(tenantId),
+      },
+    );
+
+    const config = await createAPIConfig(new Request('https://app.example.test'), {
+      tenantId: 'tenant-b',
+    });
+
+    expect(config.tenantId).toBe('tenant-b');
+    expect(config.headers['X-Workspace-Id']).toBe('tenant-b');
+  });
+
+  it('fails closed for an explicit override when no validator can authorize it', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => 'tenant-a',
+    );
+
+    await expect(createAPIConfig(new Request('https://app.example.test'), {
+      tenantId: 'tenant-b',
+    })).rejects.toThrow('Tenant context is required for this operation');
+  });
+
+  it('does not expose an unauthorized selector to custom header builders', async () => {
+    const { createAPIConfig } = createAPIConfigFactory(
+      async () => 'token-1',
+      async () => 'tenant-a',
+      undefined,
+      {
+        tenantHeaderName: null,
+        validateTenant: async () => false,
+        buildHeaders: ({ options, tenantId }) => ({
+          'X-Resolved-Tenant': tenantId ?? options.tenantId ?? 'none',
+        }),
+      },
+    );
+
+    const config = await createAPIConfig(new Request('https://app.example.test'), {
+      tenantId: 'tenant-forged',
+      requireTenant: false,
+    });
+
+    expect(config.tenantId).toBe('');
+    expect(config.headers['X-Resolved-Tenant']).toBe('none');
+  });
 });

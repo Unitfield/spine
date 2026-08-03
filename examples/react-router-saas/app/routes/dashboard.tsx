@@ -1,7 +1,7 @@
 import { Link, useLoaderData } from 'react-router';
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
 import type { UserInfo } from '@eminuckan/spine/auth';
-import { getActiveTenant, initializeTenant } from '../lib/spine/tenant.server';
+import { getCurrentTenant, initializeTenant } from '../lib/spine/tenant.server';
 
 interface DashboardData {
   user: Pick<UserInfo, 'sub' | 'name' | 'email'>;
@@ -11,7 +11,7 @@ interface DashboardData {
 
 export async function loader({ request }: { request: Request }) {
   return authRoute<DashboardData>(request, async (user) => {
-    const currentTenant = await getActiveTenant(request);
+    const currentTenant = await getCurrentTenant(request);
     const initializedTenant = currentTenant ? null : await initializeTenant(request);
     const accessToken = await getAccessToken(request);
 

@@ -346,20 +346,6 @@ function getOAuthErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
-function shouldLogoutAfterOAuthError(error: unknown): boolean {
-  if (error instanceof oidc.ResponseBodyError) {
-    return (
-      error.status === 400 ||
-      error.status === 401 ||
-      error.error === 'invalid_grant' ||
-      error.error === 'invalid_token'
-    );
-  }
-
-  const message = error instanceof Error ? error.message.toLowerCase() : '';
-  return message.includes('invalid_grant') || message.includes('invalid_token') || message.includes('unauthorized');
-}
-
 function getLogoutScope(url: URL): LogoutScope {
   const requestedScope =
     url.searchParams.get('logout') ??
@@ -1568,13 +1554,53 @@ export async function handleFrontChannelLogout(request: Request): Promise<Respon
   }
 }
 
+function getAccessTokenExpiry(accessToken: string | undefined): number | null {
+  if (!accessToken) {
+    return null;
+  }
+
+  try {
+    const [, encodedPayload] = accessToken.split('.');
+    if (!encodedPayload) {
+      return null;
+    }
+
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, 'base64url').toString('utf8'),
+    ) as { exp?: unknown };
+
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    // Opaque access tokens are valid provider contracts too; only reject a
+    // token here when it exposes a readable, already-expired JWT `exp` claim.
+    return null;
+  }
+}
+
+function isSessionExpired(sessionData: { accessToken?: string; expiresAt?: number }): boolean {
+  const now = Date.now();
+  if (typeof sessionData.expiresAt === 'number' && (!Number.isFinite(sessionData.expiresAt) || now >= sessionData.expiresAt)) {
+    return true;
+  }
+
+  const accessTokenExpiry = getAccessTokenExpiry(sessionData.accessToken);
+  return accessTokenExpiry !== null && now >= accessTokenExpiry;
+}
+
 /**
  * Get current user from session
  */
 export async function getUser(request: Request): Promise<UserInfo | null> {
   try {
     const sessionData = await getAuthSession(request);
-    return sessionData.user || null;
+
+    if (!sessionData.user || !sessionData.accessToken || isSessionExpired(sessionData)) {
+      return null;
+    }
+
+    return sessionData.user;
   } catch (error) {
     logger.error('Failed to get user', error instanceof Error ? error : undefined);
     return null;
@@ -1619,12 +1645,27 @@ export async function refreshTokens(
 ): Promise<TokenRefreshResult> {
   try {
     const sessionData = await getAuthSession(request);
-    const tokenToRefresh = refreshToken || sessionData.refreshToken;
 
-    if (!tokenToRefresh) {
+    // Refresh tokens are only authoritative when they are attached to an
+    // existing Redis session. In particular, never create a new session from
+    // a caller that has no signed session cookie.
+    if (!sessionData.sessionId) {
+      logger.warn('Cannot refresh tokens without an active Redis session');
+      return { success: false, error: 'No active session', shouldLogout: true };
+    }
+
+    const sessionRefreshToken = sessionData.refreshToken;
+    if (!sessionRefreshToken) {
       logger.warn('No refresh token available');
       return { success: false, error: 'No refresh token available', shouldLogout: true };
     }
+
+    if (refreshToken && refreshToken !== sessionRefreshToken) {
+      logger.warn('Rejected refresh token that does not match the active Redis session');
+      return { success: false, error: 'Refresh token does not match active session', shouldLogout: true };
+    }
+
+    const tokenToRefresh = sessionRefreshToken;
 
     logger.info('Initiating token refresh');
 
@@ -1632,6 +1673,11 @@ export async function refreshTokens(
     const refreshResult = await oidc.refreshTokenGrant(oidcConfig, tokenToRefresh);
 
     logger.info('Token refresh successful');
+
+    if (!refreshResult.access_token) {
+      logger.error('Token refresh returned no access token');
+      return { success: false, error: 'No access token in refresh response', shouldLogout: true };
+    }
 
     const newRefreshToken = refreshResult.refresh_token || tokenToRefresh;
     const expiresAt = refreshResult.expires_in
@@ -1662,7 +1708,9 @@ export async function refreshTokens(
     return {
       success: false,
       error: getOAuthErrorMessage(error),
-      shouldLogout: shouldLogoutAfterOAuthError(error),
+      // A failed refresh leaves the current access token untrusted. Callers
+      // must clear the local session instead of continuing with stale auth.
+      shouldLogout: true,
     };
   }
 }

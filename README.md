@@ -316,7 +316,7 @@ export { contextToUserInfo, getIdentityContext };
 import {
   configureTenantResolution,
   configureTenantCookie,
-  getActiveTenant,
+  getCurrentTenant,
   initializeTenant,
 } from '@eminuckan/spine/tenant/server';
 import { getUser } from '@eminuckan/spine/react-router/server';
@@ -342,7 +342,7 @@ configureTenantResolution({
   },
 });
 
-export { getActiveTenant, initializeTenant };
+export { getCurrentTenant, initializeTenant };
 ```
 
 ### 3. Protect a Route
@@ -350,11 +350,11 @@ export { getActiveTenant, initializeTenant };
 ```ts
 // app/routes/dashboard.tsx
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
-import { getActiveTenant, initializeTenant } from '~/lib/spine/tenant.server';
+import { getCurrentTenant, initializeTenant } from '~/lib/spine/tenant.server';
 
 export async function loader({ request }: { request: Request }) {
   return authRoute(request, async (user) => {
-    const currentTenant = await getActiveTenant(request);
+    const currentTenant = await getCurrentTenant(request);
     const initializedTenant = currentTenant ? null : await initializeTenant(request);
     const accessToken = await getAccessToken(request);
 

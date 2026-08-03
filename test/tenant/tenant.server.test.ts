@@ -9,6 +9,9 @@ vi.mock('../../src/auth/redis-session-storage.server', () => ({
 
 import {
   configureIdentityContextFetcher,
+  getCurrentTenant,
+  getAvailableTenants,
+  isTenantMember,
   resetTenantResolutionConfig,
   setCurrentTenant,
 } from '../../src/tenant/tenant.server';
@@ -43,5 +46,24 @@ describe('setCurrentTenant', () => {
       error: 'Tenant is not available for the active user',
     });
     expect(result.headers.has('Set-Cookie')).toBe(false);
+  });
+
+  it('treats a forged or stale tenant cookie as an untrusted selector', async () => {
+    const request = new Request('https://app.example.test/api/tenant/data', {
+      headers: { Cookie: '__spine_tenant=tenant-forged' },
+    });
+
+    await expect(getCurrentTenant(request)).resolves.toBeNull();
+    await expect(isTenantMember(request, 'tenant-forged')).resolves.toBe(false);
+    await expect(getAvailableTenants(request)).resolves.toEqual(['tenant-a', 'tenant-b']);
+  });
+
+  it('accepts an active cookie only when it is a current membership', async () => {
+    const request = new Request('https://app.example.test/api/tenant/data', {
+      headers: { Cookie: '__spine_tenant=tenant-b' },
+    });
+
+    await expect(getCurrentTenant(request)).resolves.toBe('tenant-b');
+    await expect(isTenantMember(request, 'tenant-a')).resolves.toBe(true);
   });
 });

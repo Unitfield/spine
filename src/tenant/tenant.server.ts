@@ -77,12 +77,20 @@ export function resetTenantResolutionConfig(): void {
 /**
  * Get current active tenant from cookie
  */
-export async function getCurrentTenant(request: Request): Promise<string | null> {
+export async function getCurrentTenant(
+  request: Request,
+  requestedTenantId?: string,
+): Promise<string | null> {
   try {
+    if (requestedTenantId) {
+      return await isTenantMember(request, requestedTenantId) ? requestedTenantId : null;
+    }
+
     const tenantFromCookie = await getActiveTenant(request);
-    if (tenantFromCookie) {
+    if (tenantFromCookie && await isTenantMember(request, tenantFromCookie)) {
       return tenantFromCookie;
     }
+
     return null;
   } catch (error) {
     console.error('Error getting current tenant:', error);
@@ -97,6 +105,10 @@ export async function getTenantFromIdentityContext(request: Request): Promise<st
   try {
     const sessionData = await getAuthSession(request);
     if (!sessionData?.user?.sub) {
+      return null;
+    }
+
+    if (typeof sessionData.expiresAt === 'number' && Date.now() >= sessionData.expiresAt) {
       return null;
     }
 
@@ -123,6 +135,10 @@ export async function getAvailableTenants(request: Request): Promise<string[]> {
       return [];
     }
 
+    if (typeof sessionData.expiresAt === 'number' && Date.now() >= sessionData.expiresAt) {
+      return [];
+    }
+
     if (!identityContextFetcher) {
       console.warn('Identity context fetcher not configured');
       return [];
@@ -134,6 +150,22 @@ export async function getAvailableTenants(request: Request): Promise<string[]> {
     console.error('Error getting available tenants:', error);
     return [];
   }
+}
+
+/**
+ * Validate a tenant selector against the current identity membership set.
+ *
+ * Cookies and request options are selectors only; this check is the boundary
+ * before a tenant ID is used in a server-authoritative operation such as an
+ * API header or a session-backed tenant switch.
+ */
+export async function isTenantMember(request: Request, tenantId: string): Promise<boolean> {
+  if (!tenantId) {
+    return false;
+  }
+
+  const availableTenants = await getAvailableTenants(request);
+  return availableTenants.includes(tenantId);
 }
 
 /**
@@ -150,8 +182,7 @@ export async function setCurrentTenant(
       return { headers: new Headers(), success: false, error: 'No active session' };
     }
 
-    const availableTenants = await getAvailableTenants(request);
-    if (!availableTenants.includes(tenantId)) {
+    if (!await isTenantMember(request, tenantId)) {
       return {
         headers: new Headers(),
         success: false,

@@ -56,7 +56,17 @@ const responseRequestMeta = new WeakMap<Response, ResponseRequestMeta>();
 const rawResponseStore = new AsyncLocalStorage<Map<string, RuntimeApiResponse<unknown>>>();
 
 function getSessionKeyFromRequest(request: Request): string {
-  const cookie = request.headers.get('cookie') || '';
+  const cookie = request.headers.get('cookie')?.trim() || '';
+
+  // A missing cookie does not identify a Redis session. Never put all such
+  // requests into the same process-wide refresh flight, or one request can
+  // receive another request's newly issued access token. The caller creates a
+  // fresh key per middleware instance, so even two clients built from the same
+  // cookie-less Request cannot share a token accidentally.
+  if (!cookie) {
+    return `request:${crypto.randomUUID()}`;
+  }
+
   const fingerprint = createHash('sha256').update(cookie).digest('hex');
   return `session:${fingerprint}`;
 }
@@ -305,6 +315,7 @@ export function createFetchMiddleware(
     retryConfig = {},
     addRequestId = true,
   } = options;
+  const refreshSessionKey = getSessionKeyFromRequest(request);
 
   const normalizedRetryConfig = {
     maxRetries: retryConfig.maxRetries ?? 3,
@@ -358,7 +369,7 @@ export function createFetchMiddleware(
           });
 
           const refreshResult = await getOrCreateRefreshPromise(
-            getSessionKeyFromRequest(request),
+            refreshSessionKey,
             () => attemptTokenRefresh(request),
             logger
           );
@@ -373,16 +384,17 @@ export function createFetchMiddleware(
             return context.fetch(context.url, init);
           }
 
-          if (refreshResult.shouldLogout) {
-            throw createClientError({
-              message: 'REFRESH_TOKEN_EXPIRED',
-              response: await toAPIResponse(context.response),
-              config: responseRequestMeta.get(context.response),
-              shouldLogout: true,
-              originalError: refreshResult,
-              cause: refreshResult,
-            });
-          }
+          // A failed or malformed refresh must not fall through to the stale
+          // 401 response. Treat every unsuccessful refresh as a terminal auth
+          // failure so callers can clear their local session.
+          throw createClientError({
+            message: 'REFRESH_TOKEN_EXPIRED',
+            response: await toAPIResponse(context.response),
+            config: responseRequestMeta.get(context.response),
+            shouldLogout: true,
+            originalError: refreshResult,
+            cause: refreshResult,
+          });
         }
 
         const retryResponse = await maybeRetryResponse(context, normalizedRetryConfig, logger);

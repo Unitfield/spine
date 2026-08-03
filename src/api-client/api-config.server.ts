@@ -5,7 +5,15 @@
  * automatically handling authentication tokens and tenant context.
  */
 
-import type { APIConfig, CreateAPIConfigOptions, GetAccessTokenFn, GetCurrentTenantFn, APILogger } from './types';
+import type {
+  APIConfig,
+  CreateAPIConfigOptions,
+  GetAccessTokenFn,
+  GetAvailableTenantsFn,
+  GetCurrentTenantFn,
+  APILogger,
+  ValidateTenantFn,
+} from './types';
 
 /**
  * Base URL Configuration
@@ -58,6 +66,16 @@ export interface APIConfigFactoryOptions {
    */
   tenantHeaderName?: string | null;
   /**
+   * Validate a resolved tenant selector against current server-side
+   * membership before it is placed in an API configuration.
+   */
+  validateTenant?: ValidateTenantFn;
+  /**
+   * Optional membership resolver shorthand. `validateTenant` takes
+   * precedence when both are provided.
+   */
+  getAvailableTenants?: GetAvailableTenantsFn;
+  /**
    * Final app-specific header hook. Returned headers are merged last.
    */
   buildHeaders?: (context: APIHeaderStrategyContext) => Record<string, string>;
@@ -92,8 +110,16 @@ export function createAPIConfigFactory(
     authHeaderName = 'Authorization',
     authHeaderValue = (token: string) => `Bearer ${token}`,
     tenantHeaderName = 'X-Tenant-Id',
+    validateTenant,
+    getAvailableTenants,
     buildHeaders,
   } = factoryOptions;
+
+  const isTenantAuthorized: ValidateTenantFn | undefined = validateTenant ?? (
+    getAvailableTenants
+      ? async (request, tenantId) => (await getAvailableTenants(request)).includes(tenantId)
+      : undefined
+  );
 
   /**
    * Resolve tenant ID from request or options
@@ -104,15 +130,53 @@ export function createAPIConfigFactory(
   ): Promise<string | null> {
     // Use explicit tenant ID if provided
     if (options.tenantId) {
-      logger?.debug?.('Using explicit tenant ID', { tenantId: options.tenantId });
-      return options.tenantId;
+      const requestedTenantId = options.tenantId;
+
+      if (!isTenantAuthorized) {
+        // An explicit override is a selector, not proof of membership. When a
+        // caller has not supplied a membership validator, only an already
+        // resolved current tenant may be reused.
+        const currentTenant = await getCurrentTenant(request, requestedTenantId);
+        if (currentTenant !== requestedTenantId) {
+          logger?.warn?.('Rejected explicit tenant override without membership validation');
+          return null;
+        }
+      } else {
+        try {
+          const authorized = await isTenantAuthorized(request, requestedTenantId);
+          if (!authorized) {
+            logger?.warn?.('Rejected explicit tenant override outside current membership');
+            return null;
+          }
+        } catch (error) {
+          logger?.warn?.('Failed to validate explicit tenant override', error instanceof Error ? error : undefined);
+          return null;
+        }
+      }
+
+      logger?.debug?.('Using validated explicit tenant ID', { tenantId: requestedTenantId });
+      return requestedTenantId;
     }
 
     // Resolve from current tenant context
     try {
       const tenantId = await getCurrentTenant(request);
       if (tenantId) {
-        logger?.debug?.('Resolved tenant from context', { tenantId });
+        if (isTenantAuthorized) {
+          let authorized = false;
+          try {
+            authorized = await isTenantAuthorized(request, tenantId);
+          } catch (error) {
+            logger?.warn?.('Failed to validate current tenant', error instanceof Error ? error : undefined);
+          }
+
+          if (!authorized) {
+            logger?.warn?.('Rejected current tenant outside current membership');
+            return null;
+          }
+        }
+
+        logger?.debug?.('Resolved validated tenant from context', { tenantId });
       }
       return tenantId;
     } catch (error) {
@@ -196,12 +260,20 @@ export function createAPIConfigFactory(
         headers[tenantHeaderName] = tenantId;
       }
       logger?.debug?.('Added tenant context header', { tenantId });
+    } else if (tenantHeaderName && options.tenantId) {
+      // Do not let a raw custom header preserve an unvalidated selector after
+      // tenant resolution failed.
+      delete headers[tenantHeaderName];
     }
 
     if (buildHeaders) {
+      const headerOptions: CreateAPIConfigOptions = tenantId
+        ? options
+        : { ...options, tenantId: undefined };
+
       Object.assign(headers, buildHeaders({
         request,
-        options,
+        options: headerOptions,
         accessToken,
         tenantId,
         includeAuth,
