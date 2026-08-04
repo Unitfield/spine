@@ -29,6 +29,7 @@ export interface TenantResolutionConfig {
 }
 
 let identityContextFetcher: IdentityContextFetcher | null = null;
+const identityContextResolutionRequests = new WeakSet<Request>();
 let resolveInitialTenant: NonNullable<TenantResolutionConfig['resolveInitialTenant']> =
   ({ identityContext }) => {
     const membership = identityContext?.memberships?.[0];
@@ -74,15 +75,50 @@ export function resetTenantResolutionConfig(): void {
       .filter((tenantId): tenantId is string => Boolean(tenantId)) ?? [];
 }
 
+function isIdentityContextResolutionInProgress(request: Request): boolean {
+  return identityContextResolutionRequests.has(request);
+}
+
+async function fetchConfiguredIdentityContext(
+  request: Request,
+): Promise<Awaited<ReturnType<IdentityContextFetcher>>> {
+  const fetcher = identityContextFetcher;
+  if (!fetcher || isIdentityContextResolutionInProgress(request)) {
+    return null;
+  }
+
+  identityContextResolutionRequests.add(request);
+  try {
+    return await fetcher(request);
+  } finally {
+    identityContextResolutionRequests.delete(request);
+  }
+}
+
 /**
  * Get current active tenant from cookie
  */
-export async function getCurrentTenant(request: Request): Promise<string | null> {
+export async function getCurrentTenant(
+  request: Request,
+  requestedTenantId?: string,
+): Promise<string | null> {
+  // Identity fetchers commonly build their request through the same tenant
+  // resolver. A nested selector is not authorization evidence and must not
+  // recurse into another membership fetch.
+  if (isIdentityContextResolutionInProgress(request)) {
+    return null;
+  }
+
   try {
+    if (requestedTenantId) {
+      return await isTenantMember(request, requestedTenantId) ? requestedTenantId : null;
+    }
+
     const tenantFromCookie = await getActiveTenant(request);
-    if (tenantFromCookie) {
+    if (tenantFromCookie && await isTenantMember(request, tenantFromCookie)) {
       return tenantFromCookie;
     }
+
     return null;
   } catch (error) {
     console.error('Error getting current tenant:', error);
@@ -94,9 +130,17 @@ export async function getCurrentTenant(request: Request): Promise<string | null>
  * Get tenant from identity context
  */
 export async function getTenantFromIdentityContext(request: Request): Promise<string | null> {
+  if (isIdentityContextResolutionInProgress(request)) {
+    return null;
+  }
+
   try {
     const sessionData = await getAuthSession(request);
     if (!sessionData?.user?.sub) {
+      return null;
+    }
+
+    if (typeof sessionData.expiresAt === 'number' && Date.now() >= sessionData.expiresAt) {
       return null;
     }
 
@@ -105,7 +149,7 @@ export async function getTenantFromIdentityContext(request: Request): Promise<st
       return null;
     }
 
-    const context = await identityContextFetcher(request);
+    const context = await fetchConfiguredIdentityContext(request);
     return resolveInitialTenant({ request, session: sessionData, identityContext: context });
   } catch (error) {
     console.error('Error getting tenant from identity context:', error);
@@ -117,9 +161,17 @@ export async function getTenantFromIdentityContext(request: Request): Promise<st
  * Get available tenants from identity context
  */
 export async function getAvailableTenants(request: Request): Promise<string[]> {
+  if (isIdentityContextResolutionInProgress(request)) {
+    return [];
+  }
+
   try {
     const sessionData = await getAuthSession(request);
     if (!sessionData?.user?.sub) {
+      return [];
+    }
+
+    if (typeof sessionData.expiresAt === 'number' && Date.now() >= sessionData.expiresAt) {
       return [];
     }
 
@@ -128,12 +180,28 @@ export async function getAvailableTenants(request: Request): Promise<string[]> {
       return [];
     }
 
-    const context = await identityContextFetcher(request);
+    const context = await fetchConfiguredIdentityContext(request);
     return resolveAvailableTenants({ request, session: sessionData, identityContext: context });
   } catch (error) {
     console.error('Error getting available tenants:', error);
     return [];
   }
+}
+
+/**
+ * Validate a tenant selector against the current identity membership set.
+ *
+ * Cookies and request options are selectors only; this check is the boundary
+ * before a tenant ID is used in a server-authoritative operation such as an
+ * API header or a session-backed tenant switch.
+ */
+export async function isTenantMember(request: Request, tenantId: string): Promise<boolean> {
+  if (!tenantId || isIdentityContextResolutionInProgress(request)) {
+    return false;
+  }
+
+  const availableTenants = await getAvailableTenants(request);
+  return availableTenants.includes(tenantId);
 }
 
 /**
@@ -148,6 +216,14 @@ export async function setCurrentTenant(
 
     if (!sessionData.user) {
       return { headers: new Headers(), success: false, error: 'No active session' };
+    }
+
+    if (!await isTenantMember(request, tenantId)) {
+      return {
+        headers: new Headers(),
+        success: false,
+        error: 'Tenant is not available for the active user',
+      };
     }
 
     const cookieValue = await setActiveTenant(tenantId);

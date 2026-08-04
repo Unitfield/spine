@@ -9,6 +9,7 @@ Server entry point:
 - `@eminuckan/spine/auth/server`
 - `@eminuckan/spine/server`
 - `@eminuckan/spine/react-router/server`
+- `@eminuckan/spine/tanstack-start/server`
 
 Key exports:
 

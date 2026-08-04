@@ -36,7 +36,10 @@ export async function attemptTokenRefresh(request: Request): Promise<TokenRefres
       return {
         success: false,
         error: refreshResult.error,
-        shouldLogout: refreshResult.shouldLogout,
+        // A failed provider refresh must never leave the caller authorized by
+        // the stale access token, even when the provider error was not marked
+        // as a permanent logout condition.
+        shouldLogout: true,
       };
     }
 

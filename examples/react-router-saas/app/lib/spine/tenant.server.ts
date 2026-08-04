@@ -1,7 +1,7 @@
 import {
   configureTenantResolution,
   configureTenantCookie,
-  getActiveTenant,
+  getCurrentTenant,
   initializeTenant,
 } from '@eminuckan/spine/tenant/server';
 import { getUser } from '@eminuckan/spine/react-router/server';
@@ -27,4 +27,4 @@ configureTenantResolution({
   },
 });
 
-export { getActiveTenant, initializeTenant };
+export { getCurrentTenant, initializeTenant };

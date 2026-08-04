@@ -46,7 +46,11 @@ function readCookieValue(cookieHeader: string, name: string): string | null {
 }
 
 /**
- * Get active tenant from cookie
+ * Read the active tenant selector from the cookie.
+ *
+ * This is intentionally a raw cookie helper. Call `getCurrentTenant` from the
+ * tenant server module before using the value in an authorization-sensitive
+ * server operation.
  */
 export async function getActiveTenant(request: Request): Promise<string | null> {
   const config = getTenantCookieConfig();

@@ -13,7 +13,9 @@ Core primitives should not know about:
 
 Adapters solve that by providing a framework-shaped surface without polluting the core package.
 
-## Current Adapter: React Router
+## Current Adapters
+
+### React Router
 
 Available entry points:
 
@@ -27,6 +29,56 @@ Benefits:
 - apps can import from a framework-named namespace today
 - adapter-specific helpers can be added later without changing import strategy
 - future adapters can follow the same pattern
+
+### TanStack Start
+
+Available entry points:
+
+- `@eminuckan/spine/tanstack-start`
+- `@eminuckan/spine/tanstack-start/server`
+
+These are also thin aliases over the framework-neutral client and server
+exports. Spine does not import `@tanstack/react-start`, `@tanstack/react-router`,
+or expose `createServerFn`/`createFileRoute` from its adapter. TanStack Start
+server functions, middleware, route handlers, redirects, and CSRF configuration
+remain owned by the consuming app.
+
+Keep server-only request access inside the app-owned function module and return
+only a safe projection across the RPC boundary:
+
+```ts
+// app/lib/viewer.functions.ts
+import { createServerFn } from '@tanstack/react-start';
+import { getRequest } from '@tanstack/react-start/server';
+import { authRoute } from '@eminuckan/spine/tanstack-start/server';
+
+export const getViewerStatus = createServerFn({ method: 'GET' }).handler(() =>
+  authRoute(getRequest(), () => ({ authenticated: true })),
+);
+```
+
+Use server routes for HTTP auth endpoints and return Spine's native
+`Response` unchanged so status, redirects, and repeated `Set-Cookie` headers
+survive the framework boundary:
+
+```ts
+// app/routes/auth.callback.tsx
+import { createFileRoute } from '@tanstack/react-router';
+import { handleCallback } from '@eminuckan/spine/tanstack-start/server';
+
+export const Route = createFileRoute('/auth/callback')({
+  server: {
+    handlers: {
+      GET: ({ request }) => handleCallback(request),
+    },
+  },
+});
+```
+
+Do not return `SessionData`, access tokens, refresh tokens, or raw request
+context from a server function or route. Keep tenant membership checks and
+product-specific redirects in the app-owned wrapper, and configure TanStack
+Start's CSRF middleware when the app defines a custom `src/start.ts`.
 
 ## Import Strategy
 

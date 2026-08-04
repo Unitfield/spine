@@ -47,8 +47,13 @@ Examples:
 
 - `@eminuckan/spine/react-router`
 - `@eminuckan/spine/react-router/server`
+- `@eminuckan/spine/tanstack-start`
+- `@eminuckan/spine/tanstack-start/server`
 
-Today the React Router adapter is intentionally thin. That is a feature, not a gap: it keeps the core honest and leaves room for future adapters such as Next.js.
+The React Router and TanStack Start adapters are intentionally thin. That is a
+feature, not a gap: they keep the core honest while leaving framework glue and
+product policy in the consuming app. TanStack Start server functions, route
+handlers, redirects, and CSRF configuration remain app-owned.
 
 ### 3. Application Adapters
 

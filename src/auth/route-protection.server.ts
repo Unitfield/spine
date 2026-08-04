@@ -25,9 +25,12 @@ function resolveRefreshThreshold(): number {
 export async function shouldRefreshToken(request: Request): Promise<boolean> {
   try {
     const sessionData = await getAuthSession(request);
+    const now = Date.now();
+    const sessionExpired =
+      typeof sessionData.expiresAt === 'number' && now >= sessionData.expiresAt;
 
     if (!sessionData.refreshToken || sessionData.refreshToken.length === 0) {
-      if (sessionData.expiresAt && Date.now() >= sessionData.expiresAt) {
+      if (sessionExpired) {
         logger.info('Token expired and no refresh token, forcing local application logout');
         const logoutRequest = await createAutomaticLogoutRequest(request, 'expired-no-refresh-token');
         throw await logout(logoutRequest);
@@ -38,8 +41,6 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
     if (!sessionData.expiresAt || !sessionData.accessToken) {
       return false;
     }
-
-    const now = Date.now();
 
     // Check JWT expiry
     let jwtExpiry: number | null = null;
@@ -62,8 +63,15 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
 
     return timeUntilEarliestExpiry <= REFRESH_THRESHOLD;
   } catch (error) {
+    // A redirect is the security boundary for expired sessions. Never turn it
+    // into a `false` result, otherwise protected loaders can continue with the
+    // stale Redis session after automatic logout was requested.
+    if (error instanceof Response) {
+      throw error;
+    }
+
     logger.error('Error checking token refresh', error instanceof Error ? error : undefined);
-    return false;
+    throw error;
   }
 }
 
@@ -78,16 +86,19 @@ async function autoRefreshTokens(request: Request): Promise<void> {
       logger.info('Auto-refreshing tokens due to expiry');
       const result = await refreshTokens(request);
 
-      if (result.success) {
+      if (result.success && result.tokens?.access_token) {
         logger.info('Auto-refresh completed successfully');
       } else {
-        logger.error('Auto-refresh failed', undefined, { error: result.error });
+        logger.error('Auto-refresh failed', undefined, {
+          error: result.error ?? 'Refresh response did not include an access token',
+        });
 
-        if (result.shouldLogout) {
-          logger.error('Refresh token invalid, forcing local application logout');
-          const logoutRequest = await createAutomaticLogoutRequest(request, 'refresh-failed');
-          throw await logout(logoutRequest);
-        }
+        // Any failed refresh must fail closed. Keeping the expired session
+        // usable (even when a provider error is classified as transient) lets
+        // callers continue with an access token that the provider rejected.
+        logger.error('Refresh token unusable, forcing local application logout');
+        const logoutRequest = await createAutomaticLogoutRequest(request, 'refresh-failed');
+        throw await logout(logoutRequest);
       }
     }
   } catch (error) {
@@ -364,7 +375,10 @@ export async function protectRoute<T>(
         await autoRefreshTokens(request);
         const user = await getUser(request);
         return loaderFn(user ?? undefined);
-      } catch {
+      } catch (error) {
+        if (error instanceof Response && error.status >= 300 && error.status < 400) {
+          throw error;
+        }
         return loaderFn(undefined);
       }
 

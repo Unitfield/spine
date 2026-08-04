@@ -13,9 +13,9 @@ The package is currently on a `0.x` release line. It is usable, tested, and publ
 ## Status
 
 - Core package: `@eminuckan/spine`
-- Current adapter: `@eminuckan/spine/react-router`
+- Current adapters: `@eminuckan/spine/react-router` and `@eminuckan/spine/tanstack-start`
 - Server-facing APIs accept Web `Request`/`Response` objects instead of framework-specific response helpers
-- React Router adapter is intentionally thin so future adapters can follow the same core contract
+- React Router and TanStack Start adapters are intentionally thin so framework glue stays in the consuming app
 - Built-in auth uses OpenID Connect and Redis-backed session/OAuth state storage
 - Extracted from repeated production-facing SaaS frontend infrastructure needs and maintained as independent OSS
 
@@ -48,6 +48,8 @@ Spine aims to be:
 | `@eminuckan/spine/server` | Framework-agnostic server primitives and shared exports |
 | `@eminuckan/spine/react-router` | React Router client adapter |
 | `@eminuckan/spine/react-router/server` | React Router server adapter |
+| `@eminuckan/spine/tanstack-start` | TanStack Start client adapter |
+| `@eminuckan/spine/tanstack-start/server` | TanStack Start server adapter |
 | `@eminuckan/spine/auth` | Auth types |
 | `@eminuckan/spine/auth/server` | Auth/session/route protection primitives |
 | `@eminuckan/spine/tenant` | Tenant store, provider, and types |
@@ -205,6 +207,27 @@ Back-channel logout verifies the signed `logout_token` against the provider JWKS
 
 The snippets below show the integration shape. See [examples/react-router-saas](examples/react-router-saas) for a runnable React Router app.
 
+### TanStack Start app glue
+
+The TanStack Start entry points are aliases over Spine's framework-neutral
+surfaces. Keep `createServerFn`, `getRequest`, and route handlers in the app,
+and return only safe data across the server boundary:
+
+```ts
+// app/lib/viewer.functions.ts
+import { createServerFn } from '@tanstack/react-start';
+import { getRequest } from '@tanstack/react-start/server';
+import { authRoute } from '@eminuckan/spine/tanstack-start/server';
+
+export const getViewerStatus = createServerFn({ method: 'GET' }).handler(() =>
+  authRoute(getRequest(), () => ({ authenticated: true })),
+);
+```
+
+For auth callbacks, logout, or other HTTP endpoints, use a TanStack server
+route and return Spine's native `Response` unchanged. Do not return session
+objects, access tokens, refresh tokens, or raw request context.
+
 ### 1. Add Auth Routes
 
 ```ts
@@ -293,7 +316,7 @@ export { contextToUserInfo, getIdentityContext };
 import {
   configureTenantResolution,
   configureTenantCookie,
-  getActiveTenant,
+  getCurrentTenant,
   initializeTenant,
 } from '@eminuckan/spine/tenant/server';
 import { getUser } from '@eminuckan/spine/react-router/server';
@@ -319,7 +342,7 @@ configureTenantResolution({
   },
 });
 
-export { getActiveTenant, initializeTenant };
+export { getCurrentTenant, initializeTenant };
 ```
 
 ### 3. Protect a Route
@@ -327,11 +350,11 @@ export { getActiveTenant, initializeTenant };
 ```ts
 // app/routes/dashboard.tsx
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
-import { getActiveTenant, initializeTenant } from '~/lib/spine/tenant.server';
+import { getCurrentTenant, initializeTenant } from '~/lib/spine/tenant.server';
 
 export async function loader({ request }: { request: Request }) {
   return authRoute(request, async (user) => {
-    const currentTenant = await getActiveTenant(request);
+    const currentTenant = await getCurrentTenant(request);
     const initializedTenant = currentTenant ? null : await initializeTenant(request);
     const accessToken = await getAccessToken(request);
 

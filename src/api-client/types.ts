@@ -132,7 +132,20 @@ export type GetAccessTokenFn = (request: Request) => Promise<string | null>;
 /**
  * Function type for getting current tenant from request
  */
-export type GetCurrentTenantFn = (request: Request) => Promise<string | null>;
+export type GetCurrentTenantFn = (
+  request: Request,
+  requestedTenantId?: string,
+) => Promise<string | null>;
+
+/**
+ * Validate a tenant selector against the current server-side membership set.
+ * Tenant cookies and explicit request overrides must not be treated as
+ * authorization evidence by themselves.
+ */
+export type ValidateTenantFn = (request: Request, tenantId: string) => Promise<boolean> | boolean;
+
+/** Resolve the current server-side membership IDs for a request. */
+export type GetAvailableTenantsFn = (request: Request) => Promise<readonly string[]> | readonly string[];
 
 /**
  * Token refresh result

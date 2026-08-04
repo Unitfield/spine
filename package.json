@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/spine",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
   "main": "./dist/index.mjs",
@@ -24,6 +24,14 @@
     "./react-router/server": {
       "types": "./dist/react-router/server.d.ts",
       "import": "./dist/react-router/server.mjs"
+    },
+    "./tanstack-start": {
+      "types": "./dist/tanstack-start/index.d.ts",
+      "import": "./dist/tanstack-start/index.mjs"
+    },
+    "./tanstack-start/server": {
+      "types": "./dist/tanstack-start/server.d.ts",
+      "import": "./dist/tanstack-start/server.mjs"
     },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
@@ -128,6 +136,7 @@
     "tsdown": "^0.22.4",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.57.0",
+    "unrun": "0.2.39",
     "vitest": "^4.1.8"
   },
   "pnpm": {

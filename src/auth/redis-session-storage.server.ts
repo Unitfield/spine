@@ -721,22 +721,54 @@ export async function destroyAuthSessionsByIdentitySession(params: {
 export async function requireAuthSession(request: Request): Promise<SessionData> {
   const sessionData = await getAuthSession(request);
 
-  if (!sessionData.userId || !sessionData.accessToken) {
+  if (!sessionData.userId || !sessionData.user || !sessionData.accessToken || isSessionDataExpired(sessionData)) {
     throw new Response('Unauthorized', { status: 401 });
   }
 
   return sessionData;
 }
 
+function getJwtExpiry(accessToken: string | undefined): number | null {
+  if (!accessToken) {
+    return null;
+  }
+
+  try {
+    const [, encodedPayload] = accessToken.split('.');
+    if (!encodedPayload) {
+      return null;
+    }
+
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, 'base64url').toString('utf8'),
+    ) as { exp?: unknown };
+
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSessionDataExpired(sessionData: SessionData): boolean {
+  const now = Date.now();
+  if (
+    typeof sessionData.expiresAt === 'number' &&
+    (!Number.isFinite(sessionData.expiresAt) || now >= sessionData.expiresAt)
+  ) {
+    return true;
+  }
+
+  const jwtExpiry = getJwtExpiry(sessionData.accessToken);
+  return jwtExpiry !== null && now >= jwtExpiry;
+}
+
 export async function isSessionValid(request: Request): Promise<boolean> {
   try {
     const sessionData = await getAuthSession(request);
 
-    if (!sessionData.user || !sessionData.accessToken) {
-      return false;
-    }
-
-    if (sessionData.expiresAt && Date.now() >= sessionData.expiresAt) {
+    if (!sessionData.user || !sessionData.accessToken || isSessionDataExpired(sessionData)) {
       return false;
     }
 
