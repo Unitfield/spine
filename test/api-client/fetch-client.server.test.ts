@@ -67,7 +67,6 @@ describe('createFetchMiddleware token refresh isolation', () => {
     expect(await responseA.text()).toBe('Bearer token-a');
     expect(await responseB.text()).toBe('Bearer token-b');
   });
-
   it('does not share a refresh flight between requests without cookies', async () => {
     const requestA = new Request('https://app.example.test/data');
     const requestB = requestA;

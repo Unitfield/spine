@@ -47,7 +47,6 @@ describe('setCurrentTenant', () => {
     });
     expect(result.headers.has('Set-Cookie')).toBe(false);
   });
-
   it('treats a forged or stale tenant cookie as an untrusted selector', async () => {
     const request = new Request('https://app.example.test/api/tenant/data', {
       headers: { Cookie: '__spine_tenant=tenant-forged' },

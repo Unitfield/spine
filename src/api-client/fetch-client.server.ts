@@ -11,7 +11,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   APIClientError,
   APIConfig,
@@ -64,9 +64,8 @@ function getSessionKeyFromRequest(request: Request): string {
   // fresh key per middleware instance, so even two clients built from the same
   // cookie-less Request cannot share a token accidentally.
   if (!cookie) {
-    return `request:${crypto.randomUUID()}`;
+    return `request:${randomUUID()}`;
   }
-
   const fingerprint = createHash('sha256').update(cookie).digest('hex');
   return `session:${fingerprint}`;
 }
