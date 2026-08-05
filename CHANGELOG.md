@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.8] - 2026-08-05
+
+### Changed
+
+- Updated the SignalR client to 10.0.11 and Redis session storage to ioredis 6.0.0 while preserving the existing realtime, authentication, tenant, and session contracts.
+- Kept the SignalR-scoped `ws` security override within SignalR's declared `^7.5.10` range and advanced it to the current 7.5.13 patch release.
+
+### Tested
+
+- Added focused SignalR lifecycle, reconnect, access-token, event, and invocation regressions.
+- Added Redis session/index, pipeline, expiry, membership, key cleanup, error-event, and connection shutdown regressions.
+
 ## [0.3.7] - 2026-08-04
 
 ### Added

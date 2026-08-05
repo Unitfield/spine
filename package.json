@@ -1,6 +1,6 @@
 {
   "name": "@eminuckan/spine",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Framework-agnostic SaaS primitives for auth, identity, multi-tenancy, permissions, and API access.",
   "type": "module",
   "main": "./dist/index.mjs",
@@ -121,8 +121,8 @@
     }
   },
   "dependencies": {
-    "@microsoft/signalr": "^9.0.0",
-    "ioredis": "^5.4.1",
+    "@microsoft/signalr": "^10.0.11",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.2",
     "openid-client": "^6.8.3",
     "zustand": "^5.0.2"
@@ -141,7 +141,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@microsoft/signalr>ws": "7.5.11",
+      "@microsoft/signalr>ws": "7.5.13",
       "ajv@6.12.6": "6.14.0",
       "brace-expansion@1.1.12": "1.1.13",
       "brace-expansion@5.0.4": "5.0.6",
