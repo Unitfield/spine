@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
   process.env.NODE_ENV = 'production';
   process.env.OIDC_AUTHORITY = 'https://identity.unitfield.com/realms/unitfield';
   process.env.OIDC_CLIENT_ID = 'unitfield-app';
-  process.env.OIDC_REDIRECT_URI = 'https://app.unitfield.com/auth/callback';
+  process.env.OIDC_REDIRECT_URI = 'https://app.unitfield.com/oidc/callback';
   process.env.OAUTH_STATE_TTL = String(configuredTtl);
 
   return {
@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => {
     createOAuthState: vi.fn(async () => 'state-id'),
     getOAuthState: vi.fn(),
     deleteOAuthState: vi.fn(async () => undefined),
+    createOAuthRecoveryRecord: vi.fn(async () => 'recovery-ticket'),
+    consumeOAuthRecoveryRecord: vi.fn(async () => null),
+    deleteOAuthRecoveryRecord: vi.fn(async () => undefined),
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -64,6 +67,9 @@ vi.mock('../../src/auth/redis-session-storage.server', () => ({
   createOAuthState: mocks.createOAuthState,
   getOAuthState: mocks.getOAuthState,
   deleteOAuthState: mocks.deleteOAuthState,
+  createOAuthRecoveryRecord: mocks.createOAuthRecoveryRecord,
+  consumeOAuthRecoveryRecord: mocks.consumeOAuthRecoveryRecord,
+  deleteOAuthRecoveryRecord: mocks.deleteOAuthRecoveryRecord,
 }));
 
 vi.mock('../../src/logging', () => ({ logger: mocks.logger }));
@@ -123,6 +129,9 @@ describe('OAuth state TTL configuration', () => {
     );
     expect(response.headers.getSetCookie()).not.toContain(
       expect.stringContaining('Max-Age=600'),
+    );
+    expect(response.headers.getSetCookie()).toContain(
+      'unitfield_oauth_recovery=recovery-ticket; Path=/oidc/callback; HttpOnly; SameSite=Lax; Max-Age=1800; Secure',
     );
   });
 

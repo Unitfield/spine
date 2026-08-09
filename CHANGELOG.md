@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.10] - 2026-08-09
+
+### Added
+
+- Added a server-only, opaque OAuth recovery ticket contract for one atomic
+  retry of a stale ordinary authorization callback while preserving the
+  originally sanitized return URL.
+
+### Security
+
+- Bound recovery consumption to the exact callback state in Redis, preserving
+  mismatch and race safety without trusting a client boolean, callback code,
+  or return URL.
+- Excluded provider errors, malformed callbacks, state mismatches, storage and
+  configuration failures, token exchange failures, and application actions
+  from recovery; terminal and successful callbacks clear recovery tickets.
+
 ## [0.3.9] - 2026-08-09
 
 ### Added

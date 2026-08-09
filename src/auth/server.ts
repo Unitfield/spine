@@ -8,6 +8,17 @@
 export * from './auth.server';
 export * from './callback-errors';
 export * from './redis-session-storage.server';
+export {
+  clearOAuthRecoveryIntentHeaders,
+  consumeOAuthRecoveryIntent,
+  getOAuthRecoveryCookiePath,
+  OAUTH_RECOVERY_COOKIE_NAME,
+  OAUTH_RECOVERY_TTL_SECONDS,
+} from './oauth-recovery.server';
+export type {
+  OAuthRecoveryConsumeResult,
+  OAuthRecoveryIntent,
+} from './oauth-recovery.server';
 export * from './route-protection.server';
 export * from './token-refresh.server';
 export type {

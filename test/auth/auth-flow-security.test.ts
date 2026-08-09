@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => {
     createOAuthState: vi.fn(async () => 'state-id'),
     getOAuthState: vi.fn(),
     deleteOAuthState: vi.fn(async () => undefined),
+    createOAuthRecoveryRecord: vi.fn(async () => 'recovery-ticket'),
+    consumeOAuthRecoveryRecord: vi.fn(async () => null),
+    deleteOAuthRecoveryRecord: vi.fn(async () => undefined),
     jwtVerify: vi.fn(),
     logger: {
       debug: vi.fn(),
@@ -52,6 +55,9 @@ vi.mock('../../src/auth/redis-session-storage.server', () => ({
   createOAuthState: mocks.createOAuthState,
   getOAuthState: mocks.getOAuthState,
   deleteOAuthState: mocks.deleteOAuthState,
+  createOAuthRecoveryRecord: mocks.createOAuthRecoveryRecord,
+  consumeOAuthRecoveryRecord: mocks.consumeOAuthRecoveryRecord,
+  deleteOAuthRecoveryRecord: mocks.deleteOAuthRecoveryRecord,
 }));
 
 vi.mock('../../src/logging', () => ({ logger: mocks.logger }));
@@ -146,6 +152,12 @@ beforeEach(() => {
   mocks.getOAuthState.mockResolvedValue(undefined);
   mocks.deleteOAuthState.mockReset();
   mocks.deleteOAuthState.mockResolvedValue(undefined);
+  mocks.createOAuthRecoveryRecord.mockReset();
+  mocks.createOAuthRecoveryRecord.mockResolvedValue('recovery-ticket');
+  mocks.consumeOAuthRecoveryRecord.mockReset();
+  mocks.consumeOAuthRecoveryRecord.mockResolvedValue(null);
+  mocks.deleteOAuthRecoveryRecord.mockReset();
+  mocks.deleteOAuthRecoveryRecord.mockResolvedValue(undefined);
   mocks.jwtVerify.mockReset();
   mocks.discovery.mockReset();
   mocks.discovery.mockResolvedValue(mocks.oidcConfiguration);
@@ -173,6 +185,29 @@ describe('OAuth flow security boundaries', () => {
     expect(response.headers.get('set-cookie')).toContain('Secure');
     expect(serializedLogCalls()).not.toContain(invitationToken);
     expect(serializedLogCalls()).not.toContain('/invitations/accept?');
+  });
+
+  it('issues an opaque recovery ticket only for ordinary login transactions', async () => {
+    const ordinary = await login(
+      new Request('https://app.unitfield.com/auth/login'),
+      '/dashboard',
+    );
+
+    expect(ordinary.headers.getSetCookie()).toEqual(expect.arrayContaining([
+      expect.stringMatching(
+        /^unitfield_oauth_recovery=recovery-ticket; Path=\/auth\/callback; HttpOnly; SameSite=Lax; Max-Age=1800; Secure$/,
+      ),
+    ]));
+    expect(ordinary.headers.getSetCookie().join('\n')).not.toContain('=1;');
+
+    mocks.createOAuthRecoveryRecord.mockClear();
+    const action = await login(
+      new Request('https://app.unitfield.com/auth/login'),
+      { returnUrl: '/dashboard', kcAction: 'webauthn-register' },
+    );
+
+    expect(mocks.createOAuthRecoveryRecord).not.toHaveBeenCalled();
+    expect(action.headers.getSetCookie().some((cookie) => cookie.startsWith('unitfield_oauth_recovery='))).toBe(false);
   });
 
   it.each([
@@ -295,6 +330,23 @@ describe('OAuth callback recovery contract', () => {
     );
   });
 
+  it('leaves the server recovery ticket for the adapter after a clean stale failure', async () => {
+    mocks.getOAuthState.mockResolvedValue(null);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback(
+        'code=authorization-code&state=expected-state',
+        'unitfield_oauth_state_id=state-id; unitfield_oauth_recovery=recovery-ticket',
+      ),
+    );
+
+    expect(failure.code).toBe('stale_transaction');
+    expect(mocks.deleteOAuthRecoveryRecord).not.toHaveBeenCalled();
+    expect(failure.cleanupHeaders.getSetCookie()).not.toContain(
+      'unitfield_oauth_recovery=; Path=/auth/callback; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+  });
+
   it('rejects an OpenID transaction without a nonce before token exchange', async () => {
     mocks.getOAuthState.mockResolvedValue(validOAuthState({ nonce: undefined }));
 
@@ -341,6 +393,24 @@ describe('OAuth callback recovery contract', () => {
       'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
     ]);
     expect(serializedLogCalls()).not.toContain('session cleanup unavailable');
+  });
+
+  it('burns the recovery ticket when stale cleanup fails', async () => {
+    mocks.getOAuthState.mockResolvedValue(null);
+    mocks.destroyAuthSession.mockRejectedValue(new Error('session cleanup unavailable'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback(
+        'code=authorization-code&state=expected-state',
+        'unitfield_oauth_state_id=state-id; unitfield_oauth_recovery=recovery-ticket',
+      ),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(mocks.deleteOAuthRecoveryRecord).toHaveBeenCalledWith('recovery-ticket');
+    expect(failure.cleanupHeaders.getSetCookie()).toContain(
+      'unitfield_oauth_recovery=; Path=/auth/callback; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
   });
 
   it('marks an explicitly aged transaction as recoverable stale state', async () => {
@@ -484,7 +554,10 @@ describe('OAuth callback recovery contract', () => {
 
   it('preserves provider access-denied behavior while clearing the OAuth cookie', async () => {
     const response = await handleCallback(
-      requestWithCallback('error=access_denied&error_description=No+access'),
+      requestWithCallback(
+        'error=access_denied&error_description=No+access',
+        'unitfield_oauth_state_id=state-id; unitfield_oauth_recovery=recovery-ticket',
+      ),
     );
 
     expect(response.headers.get('location')).toBe('https://app.unitfield.com/auth/login');
@@ -492,6 +565,10 @@ describe('OAuth callback recovery contract', () => {
     expect(response.headers.getSetCookie().join('\n')).not.toContain('No%20access');
     expect(response.headers.getSetCookie()).toContain(
       'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+    expect(mocks.deleteOAuthRecoveryRecord).toHaveBeenCalledWith('recovery-ticket');
+    expect(response.headers.getSetCookie()).toContain(
+      'unitfield_oauth_recovery=; Path=/auth/callback; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
     );
   });
 

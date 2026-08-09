@@ -9,7 +9,10 @@
 import Redis from 'ioredis';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthSessionSummary, SessionData, OAuthState } from './types';
-import { OAUTH_STATE_TTL_SECONDS } from './oauth-state-config';
+import {
+  OAUTH_RECOVERY_TTL_SECONDS,
+  OAUTH_STATE_TTL_SECONDS,
+} from './oauth-state-config';
 import { logger } from '../logging';
 
 // ============================================================================
@@ -41,6 +44,7 @@ const KEY_PREFIX = process.env.REDIS_KEY_PREFIX || '';
 
 const REDIS_KEYS = {
   oauthState: (stateId: string) => `${KEY_PREFIX}oauth:state:${stateId}`,
+  oauthRecovery: (ticket: string) => `${KEY_PREFIX}oauth:recovery:${ticket}`,
   session: (sessionId: string) => `${KEY_PREFIX}session:${sessionId}`,
   sessionByUser: (userId: string) => `${KEY_PREFIX}session:index:user:${userId}`,
   sessionBySid: (sid: string) => `${KEY_PREFIX}session:index:sid:${sid}`,
@@ -821,6 +825,101 @@ export async function deleteOAuthState(stateId: string): Promise<void> {
   const key = REDIS_KEYS.oauthState(stateId);
   await getRedis().del(key);
   logger.debug('OAuth state deleted', { hasStateId: true });
+}
+
+export interface OAuthRecoveryRecord {
+  state: string;
+  returnUrl: string;
+  createdAt: number;
+}
+
+const CONSUME_OAUTH_RECOVERY_RECORD_SCRIPT = `
+local value = redis.call('GET', KEYS[1])
+if not value then
+  return nil
+end
+local ok, record = pcall(cjson.decode, value)
+if not ok or type(record) ~= 'table' or type(record.state) ~= 'string' then
+  redis.call('DEL', KEYS[1])
+  return '__invalid__'
+end
+if record.state ~= ARGV[1] then
+  return '__mismatch__'
+end
+redis.call('DEL', KEYS[1])
+return value
+`;
+
+/**
+ * Store a short-lived recovery record under a separate opaque ticket.
+ * The ticket is returned to the caller and is never logged or embedded with
+ * callback state, return URLs, or provider data.
+ */
+export async function createOAuthRecoveryRecord(
+  record: OAuthRecoveryRecord,
+): Promise<string> {
+  const ticket = randomBytes(32).toString('base64url');
+  const key = REDIS_KEYS.oauthRecovery(ticket);
+
+  await getRedis().setex(
+    key,
+    OAUTH_RECOVERY_TTL_SECONDS,
+    JSON.stringify(record),
+  );
+
+  logger.debug('OAuth recovery record created', {
+    hasTicket: true,
+    ttl: OAUTH_RECOVERY_TTL_SECONDS,
+  });
+
+  return ticket;
+}
+
+/**
+ * Atomically consume a recovery record.  The Redis script compares the exact
+ * expected state before DEL, so mismatched callbacks leave the ticket intact
+ * and concurrent exact-state requests can receive a record at most once.
+ */
+export async function consumeOAuthRecoveryRecord(
+  ticket: string,
+  expectedState: string,
+): Promise<OAuthRecoveryRecord | null> {
+  const key = REDIS_KEYS.oauthRecovery(ticket);
+  const value = await getRedis().eval(
+    CONSUME_OAUTH_RECOVERY_RECORD_SCRIPT,
+    1,
+    key,
+    expectedState,
+  );
+
+  if (value === '__mismatch__' || value === null || value === undefined) {
+    return null;
+  }
+
+  if (value === '__invalid__') {
+    logger.error('OAuth recovery record failed atomic validation', undefined, {
+      errorType: 'InvalidRecoveryRecord',
+    });
+    throw new Error('OAuth recovery storage failure');
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error('OAuth recovery storage failure');
+  }
+
+  try {
+    return JSON.parse(value) as OAuthRecoveryRecord;
+  } catch (error) {
+    logger.error('Failed to parse OAuth recovery record', undefined, {
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
+    throw new Error('OAuth recovery storage failure');
+  }
+}
+
+export async function deleteOAuthRecoveryRecord(ticket: string): Promise<void> {
+  await getRedis().del(REDIS_KEYS.oauthRecovery(ticket));
+  logger.debug('OAuth recovery record deleted', { hasTicket: true });
 }
 
 export async function cleanupExpiredOAuthStates(): Promise<number> {

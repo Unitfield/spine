@@ -171,6 +171,23 @@ const redisMock = vi.hoisted(() => {
       return deleted;
     }
 
+    async eval(_script: string, _keyCount: number, key: string, expectedState: string): Promise<unknown> {
+      const entry = getEntry(key);
+      if (!entry || entry.kind !== 'string') return null;
+
+      const value = entry.value as string;
+      let record: { state?: unknown };
+      try {
+        record = JSON.parse(value) as { state?: unknown };
+      } catch {
+        return '__invalid__';
+      }
+
+      if (record.state !== expectedState) return '__mismatch__';
+      state.entries.delete(key);
+      return value;
+    }
+
     async keys(pattern: string): Promise<string[]> {
       const expression = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`);
       return Array.from(state.entries.keys()).filter((key) => {
@@ -322,5 +339,53 @@ describe('Redis session storage', () => {
     await expect(
       storage.getOAuthState(stateId, { throwOnMalformed: true }),
     ).rejects.toThrow('OAuth state storage failure');
+  });
+
+  it('atomically consumes recovery records only for the exact callback state', async () => {
+    const ticket = await storage.createOAuthRecoveryRecord({
+      state: 'expected-state',
+      returnUrl: '/dashboard?invite=preserved',
+      createdAt: Date.now(),
+    });
+
+    await expect(
+      storage.consumeOAuthRecoveryRecord(ticket, 'wrong-state'),
+    ).resolves.toBeNull();
+    const whitespaceTicket = await storage.createOAuthRecoveryRecord({
+      state: 'expected-state',
+      returnUrl: '/dashboard',
+      createdAt: Date.now(),
+    });
+    await expect(
+      storage.consumeOAuthRecoveryRecord(whitespaceTicket, ' expected-state '),
+    ).resolves.toBeNull();
+    await expect(
+      storage.consumeOAuthRecoveryRecord(whitespaceTicket, 'expected-state'),
+    ).resolves.toMatchObject({ state: 'expected-state' });
+    await expect(
+      storage.consumeOAuthRecoveryRecord(ticket, 'expected-state'),
+    ).resolves.toMatchObject({
+      state: 'expected-state',
+      returnUrl: '/dashboard?invite=preserved',
+    });
+    await expect(
+      storage.consumeOAuthRecoveryRecord(ticket, 'expected-state'),
+    ).resolves.toBeNull();
+  });
+
+  it('gives a concurrent exact-state consume a single winner', async () => {
+    const ticket = await storage.createOAuthRecoveryRecord({
+      state: 'racing-state',
+      returnUrl: '/dashboard',
+      createdAt: Date.now(),
+    });
+
+    const results = await Promise.all([
+      storage.consumeOAuthRecoveryRecord(ticket, 'racing-state'),
+      storage.consumeOAuthRecoveryRecord(ticket, 'racing-state'),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
   });
 });
