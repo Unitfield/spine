@@ -309,4 +309,18 @@ describe('Redis session storage', () => {
     await storage.createOAuthState({ state: 'new-state' });
     expect(redisMock.state.clients).toHaveLength(2);
   });
+
+  it('preserves getOAuthState compatibility while supporting strict callback reads', async () => {
+    const stateId = 'malformed-state-id';
+    redisMock.state.entries.set(`spine-test:oauth:state:${stateId}`, {
+      kind: 'string',
+      value: '{malformed',
+      expiresAt: null,
+    });
+
+    await expect(storage.getOAuthState(stateId)).resolves.toBeNull();
+    await expect(
+      storage.getOAuthState(stateId, { throwOnMalformed: true }),
+    ).rejects.toThrow('OAuth state storage failure');
+  });
 });

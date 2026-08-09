@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.9] - 2026-08-09
+
+### Added
+
+- Added a server-only typed OAuth callback failure contract that exposes a
+  recoverability signal only for missing or expired normal authorization
+  transactions.
+
+### Security
+
+- Preserved exact state, nonce, and PKCE validation while classifying malformed,
+  mismatched, provider, token-exchange, storage, configuration, session, and
+  application-action failures as non-recoverable.
+- Preserved repeated callback cleanup cookies and redacted OAuth state IDs from
+  Redis storage logs.
+
 ## [0.3.8] - 2026-08-05
 
 ### Changed

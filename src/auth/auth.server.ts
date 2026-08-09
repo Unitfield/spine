@@ -51,6 +51,13 @@ import {
   sanitizeOAuthReturnUrl,
   serializeTemporaryAuthCookie,
 } from './oauth-security';
+import {
+  OAuthCallbackError,
+  OAuthCallbackFailureCodes,
+  isOAuthCallbackError,
+  type OAuthCallbackFailureCode,
+} from './callback-errors';
+import { OAUTH_STATE_TTL_MS, OAUTH_STATE_TTL_SECONDS } from './oauth-state-config';
 
 type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
 type LogoutScope = 'identity' | 'local' | 'all';
@@ -483,11 +490,12 @@ async function getOAuthConfig(): Promise<oidc.Configuration> {
     });
     return configuration;
   } catch (error) {
-    logger.error('OIDC discovery failed', error instanceof Error ? error : undefined, {
+    logger.error('OIDC discovery failed', undefined, {
       authority: config.authority,
       clientId: config.clientId,
+      errorType: error instanceof Error ? error.name : 'UnknownError',
     });
-    throw new Error(`OIDC discovery failed: ${getOAuthErrorMessage(error)}`);
+    throw new Error('OIDC discovery failed');
   }
 }
 
@@ -946,6 +954,162 @@ export function hasAuthError(request: Request): boolean {
   return cookies?.includes(`${AUTH_ERROR_COOKIE}=`) ?? false;
 }
 
+type OAuthCallbackStage =
+  | 'configuration'
+  | 'provider'
+  | 'state'
+  | 'application_action'
+  | 'token_exchange'
+  | 'session_creation'
+  | 'storage';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getOAuthStateIdFromRequest(request: Request): string | null {
+  const cookies = request.headers.get('Cookie');
+  if (!cookies) {
+    return null;
+  }
+
+  const cookieRegex = new RegExp(
+    `(?:^|;\\s*)${escapeRegExp(OAUTH_STATE_COOKIE)}=([^;]*)`,
+  );
+  const cookieValue = cookies.match(cookieRegex)?.[1];
+  if (!cookieValue) {
+    return null;
+  }
+
+  try {
+    const stateId = decodeURIComponent(cookieValue);
+    return stateId.length > 0 ? stateId : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasNonEmptyCallbackValue(value: string | null): value is string {
+  return value !== null && value.trim().length > 0;
+}
+
+function appendHeadersPreservingSetCookie(target: Headers, source: HeadersInit): void {
+  const sourceHeaders = new Headers(source);
+  const getSetCookie = (sourceHeaders as Headers & {
+    getSetCookie?: () => string[];
+  }).getSetCookie;
+  const setCookies = getSetCookie?.call(sourceHeaders) ?? Array.from(sourceHeaders)
+    .filter(([name]) => name.toLowerCase() === 'set-cookie')
+    .map(([, value]) => value);
+
+  if (setCookies.length > 0) {
+    for (const cookie of setCookies) {
+      target.append('Set-Cookie', cookie);
+    }
+  } else {
+    const setCookie = sourceHeaders.get('Set-Cookie');
+    if (setCookie) {
+      target.append('Set-Cookie', setCookie);
+    }
+  }
+
+  for (const [name, value] of sourceHeaders) {
+    if (name.toLowerCase() !== 'set-cookie') {
+      target.set(name, value);
+    }
+  }
+}
+
+function appendOAuthStateCookieClear(headers: Headers): void {
+  headers.append(
+    'Set-Cookie',
+    serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
+  );
+}
+
+function isUsableOAuthState(
+  state: OAuthState | null,
+  requireNonce: boolean,
+): state is OAuthState {
+  return state !== null &&
+    typeof state.state === 'string' &&
+    state.state.length > 0 &&
+    typeof state.codeVerifier === 'string' &&
+    state.codeVerifier.length > 0 &&
+    (state.nonce === undefined
+      ? !requireNonce
+      : typeof state.nonce === 'string' && state.nonce.length > 0) &&
+    typeof state.createdAt === 'number' &&
+    Number.isFinite(state.createdAt) &&
+    (state.returnUrl === undefined || typeof state.returnUrl === 'string') &&
+    (state.kcAction === undefined || typeof state.kcAction === 'string');
+}
+
+function getCallbackFailureCode(
+  error: unknown,
+  stage: OAuthCallbackStage,
+): OAuthCallbackFailureCode {
+  if (isOAuthCallbackError(error)) {
+    return error.code;
+  }
+
+  switch (stage) {
+    case 'configuration':
+      return OAuthCallbackFailureCodes.ConfigurationError;
+    case 'state':
+    case 'storage':
+      return OAuthCallbackFailureCodes.StorageError;
+    case 'application_action':
+      return OAuthCallbackFailureCodes.ApplicationActionFailed;
+    case 'token_exchange':
+      return OAuthCallbackFailureCodes.TokenExchangeFailed;
+    case 'session_creation':
+      return OAuthCallbackFailureCodes.SessionCreationFailed;
+    case 'provider':
+    default:
+      return OAuthCallbackFailureCodes.StorageError;
+  }
+}
+
+async function createOAuthCallbackFailure(
+  request: Request,
+  stateId: string | null,
+  failureCode: OAuthCallbackFailureCode,
+): Promise<OAuthCallbackError> {
+  const cleanupHeaders = new Headers();
+  let cleanupError: unknown;
+
+  if (stateId) {
+    try {
+      await deleteOAuthState(stateId);
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+
+  try {
+    const sessionHeaders = await destroyAuthSession(request);
+    appendHeadersPreservingSetCookie(cleanupHeaders, sessionHeaders);
+  } catch (error) {
+    cleanupError ??= error;
+  }
+
+  appendOAuthStateCookieClear(cleanupHeaders);
+
+  const effectiveFailureCode = cleanupError
+    ? OAuthCallbackFailureCodes.StorageError
+    : failureCode;
+
+  if (cleanupError) {
+    logger.warn('OAuth callback cleanup failed', {
+      failureCode: effectiveFailureCode,
+      errorType: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+    });
+  }
+
+  return new OAuthCallbackError(effectiveFailureCode, cleanupHeaders);
+}
+
 // ============================================================================
 // Auth Functions
 // ============================================================================
@@ -1044,7 +1208,9 @@ export async function login(
     const headers = new Headers();
     headers.append(
       'Set-Cookie',
-      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, stateId, { maxAge: 600 }),
+      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, stateId, {
+        maxAge: OAUTH_STATE_TTL_SECONDS,
+      }),
     );
 
     logger.info('OIDC authorization flow initiated', {
@@ -1079,9 +1245,13 @@ export async function login(
  *   - Redirect to home to start fresh login
  */
 export async function handleCallback(request: Request): Promise<Response> {
+  let stateId: string | null = null;
+  let callbackStage: OAuthCallbackStage = 'configuration';
+
   try {
     const config = getAuthConfig();
     const hasLandingPage = getEffectiveHasLandingPage(config);
+    const requiresNonce = config.scope.split(/\s+/).includes('openid');
     const url = new URL(request.url);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
@@ -1089,37 +1259,44 @@ export async function handleCallback(request: Request): Promise<Response> {
     const errorDescription = url.searchParams.get('error_description');
     const kcAction = url.searchParams.get('kc_action');
     const kcActionStatus = url.searchParams.get('kc_action_status');
+    const hasCode = hasNonEmptyCallbackValue(code);
+    const hasState = hasNonEmptyCallbackValue(state);
+    const hasApplicationAction = Boolean(
+      hasNonEmptyCallbackValue(kcAction) ||
+      hasNonEmptyCallbackValue(kcActionStatus),
+    );
+
+    stateId = getOAuthStateIdFromRequest(request);
 
     logger.info('OIDC callback received', {
-      hasCode: !!code,
-      hasState: !!state,
+      hasCode,
+      hasState,
       hasError: Boolean(error),
       hasErrorDescription: Boolean(errorDescription),
-      hasKcAction: Boolean(kcAction),
-      hasKcActionStatus: Boolean(kcActionStatus),
+      hasKcAction: hasNonEmptyCallbackValue(kcAction),
+      hasKcActionStatus: hasNonEmptyCallbackValue(kcActionStatus),
       clientId: config.clientId,
-      redirectUri: config.redirectUri
+      redirectUri: config.redirectUri,
     });
 
     // Handle OAuth errors
     if (error) {
-      if (kcActionStatus && state) {
-        const cookies = request.headers.get('Cookie');
-        const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
-        const cookieMatch = cookies?.match(oauthStateRegex);
-        const stateId = cookieMatch?.[1];
-
+      if (kcActionStatus && hasState) {
+        callbackStage = 'state';
         if (stateId) {
-          const oauthState = await getOAuthState(stateId);
+          const oauthState = await getOAuthState(stateId, { throwOnMalformed: true });
           const stateAge = oauthState ? Date.now() - oauthState.createdAt : Number.POSITIVE_INFINITY;
 
-          if (oauthState && oauthState.state === state && stateAge <= 10 * 60 * 1000) {
+          if (
+            oauthState &&
+            isUsableOAuthState(oauthState, requiresNonce) &&
+            oauthState.state === state &&
+            stateAge <= OAUTH_STATE_TTL_MS
+          ) {
+            callbackStage = 'application_action';
             await deleteOAuthState(stateId);
             const headers = new Headers();
-            headers.append(
-              'Set-Cookie',
-              serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
-            );
+            appendOAuthStateCookieClear(headers);
 
             const redirectUrl = appendApplicationInitiatedActionResult(
               sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
@@ -1152,7 +1329,9 @@ export async function handleCallback(request: Request): Promise<Response> {
       if (error === 'access_denied') {
         logger.warn('Access denied for this application', { clientId: config.clientId });
         // Clear any existing session and redirect to home without triggering new login
+        callbackStage = 'storage';
         const headers = await destroyAuthSession(request);
+        appendOAuthStateCookieClear(headers);
         // Set error cookies to:
         // 1. Prevent redirect loop (auth_error)
         // 2. Allow UI to show appropriate message (auth_error_type, auth_error_description)
@@ -1185,7 +1364,9 @@ export async function handleCallback(request: Request): Promise<Response> {
       // Handle login_required - session expired or user not logged in
       if (error === 'login_required') {
         logger.info('Login required, user session may have expired');
+        callbackStage = 'storage';
         const headers = await destroyAuthSession(request);
+        appendOAuthStateCookieClear(headers);
         // Use redirectUri to get correct base URL with port
         const redirectUri = new URL(config.redirectUri);
         const baseUrl = redirectUri.origin;
@@ -1193,7 +1374,9 @@ export async function handleCallback(request: Request): Promise<Response> {
       }
       
       // Handle other errors
+      callbackStage = 'storage';
       const headers = await destroyAuthSession(request);
+      appendOAuthStateCookieClear(headers);
       headers.append(
         'Set-Cookie',
         serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, error, { maxAge: 300 }),
@@ -1210,45 +1393,69 @@ export async function handleCallback(request: Request): Promise<Response> {
       return createRedirectResponse(baseUrl, { headers });
     }
 
-    // Get stateId from cookie (app-specific)
-    const cookies = request.headers.get('Cookie');
-    const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
-    const cookieMatch = cookies?.match(oauthStateRegex);
-    const stateId = cookieMatch?.[1];
+    // Callback syntax is checked before looking up local state. A callback
+    // without a state parameter is malformed, never a recoverable stale flow.
+    if (!hasState) {
+      callbackStage = hasApplicationAction ? 'application_action' : 'state';
+      throw new OAuthCallbackError(
+        hasApplicationAction
+          ? OAuthCallbackFailureCodes.ApplicationActionFailed
+          : OAuthCallbackFailureCodes.MalformedCallback,
+      );
+    }
+
+    if (!hasCode && !hasApplicationAction) {
+      callbackStage = 'state';
+      throw new OAuthCallbackError(OAuthCallbackFailureCodes.MalformedCallback);
+    }
 
     if (!stateId) {
-      throw new Error('OAuth state ID not found in cookie');
+      callbackStage = hasApplicationAction ? 'application_action' : 'state';
+      throw new OAuthCallbackError(
+        hasApplicationAction
+          ? OAuthCallbackFailureCodes.ApplicationActionFailed
+          : OAuthCallbackFailureCodes.StaleTransaction,
+      );
     }
 
     // Retrieve OAuth state from Redis
-    const oauthState = await getOAuthState(stateId);
+    callbackStage = 'state';
+    const oauthState = await getOAuthState(stateId, { throwOnMalformed: true });
 
     if (!oauthState) {
-      throw new Error('No OAuth state found - state may have expired');
+      throw new OAuthCallbackError(
+        hasApplicationAction
+          ? OAuthCallbackFailureCodes.ApplicationActionFailed
+          : OAuthCallbackFailureCodes.StaleTransaction,
+      );
     }
 
-    if (!state) {
-      throw new Error('Missing required callback state parameter');
+    if (!isUsableOAuthState(oauthState, requiresNonce)) {
+      throw new OAuthCallbackError(OAuthCallbackFailureCodes.StorageError);
     }
 
     if (oauthState.state !== state) {
-      throw new Error(`OAuth state mismatch`);
+      throw new OAuthCallbackError(OAuthCallbackFailureCodes.StateMismatch);
     }
 
-    // Check state age (10 minutes max)
+    const isApplicationAction = Boolean(
+      hasApplicationAction || oauthState.kcAction,
+    );
     const stateAge = Date.now() - oauthState.createdAt;
-    if (stateAge > 10 * 60 * 1000) {
-      throw new Error('OAuth state expired');
+    if (stateAge > OAUTH_STATE_TTL_MS) {
+      throw new OAuthCallbackError(
+        isApplicationAction
+          ? OAuthCallbackFailureCodes.ApplicationActionFailed
+          : OAuthCallbackFailureCodes.StaleTransaction,
+      );
     }
 
-    if (!code) {
+    if (!hasCode) {
       if (kcActionStatus) {
+        callbackStage = 'application_action';
         await deleteOAuthState(stateId);
         const headers = new Headers();
-        headers.append(
-          'Set-Cookie',
-          serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
-        );
+        appendOAuthStateCookieClear(headers);
 
         const redirectUrl = appendApplicationInitiatedActionResult(
           sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
@@ -1264,13 +1471,19 @@ export async function handleCallback(request: Request): Promise<Response> {
         return createRedirectResponse(redirectUrl, { headers });
       }
 
-      throw new Error('Missing required callback code parameter');
+      throw new OAuthCallbackError(
+        isApplicationAction
+          ? OAuthCallbackFailureCodes.ApplicationActionFailed
+          : OAuthCallbackFailureCodes.MalformedCallback,
+      );
     }
 
     logger.info('Initiating token exchange');
 
+    callbackStage = 'configuration';
     const oidcConfig = await getOAuthConfig();
     const authorizationResponseUrl = createAuthorizationResponseUrl(request.url, config.redirectUri);
+    callbackStage = 'token_exchange';
     const tokenResult = await oidc.authorizationCodeGrant(oidcConfig, authorizationResponseUrl, {
       pkceCodeVerifier: oauthState.codeVerifier,
       expectedState: oauthState.state,
@@ -1280,23 +1493,24 @@ export async function handleCallback(request: Request): Promise<Response> {
 
     logger.info('Token exchange completed successfully');
 
+    callbackStage = 'session_creation';
     const claims = getClaimsFromTokenResponse(tokenResult);
 
     // Create session data
     const newSessionData = await createSessionData(tokenResult, claims);
 
     // Create new session
+    callbackStage = 'session_creation';
     const sessionHeaders = await createAuthSession(request, newSessionData);
 
     // Clean up OAuth state from Redis
+    callbackStage = 'storage';
     await deleteOAuthState(stateId);
 
     // Combine headers and clear OAuth state cookie (app-specific)
-    const headers = new Headers(sessionHeaders);
-    headers.append(
-      'Set-Cookie',
-      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
-    );
+    const headers = new Headers();
+    appendHeadersPreservingSetCookie(headers, sessionHeaders);
+    appendOAuthStateCookieClear(headers);
 
     logger.info('OAuth callback processed successfully');
 
@@ -1308,25 +1522,13 @@ export async function handleCallback(request: Request): Promise<Response> {
     );
     return createRedirectResponse(redirectUrl, { headers });
   } catch (error) {
+    const failureCode = getCallbackFailureCode(error, callbackStage);
     logger.error('OAuth callback failed', undefined, {
+      failureCode,
       errorType: error instanceof Error ? error.name : 'UnknownError',
     });
 
-    // Try to clean up OAuth state on error
-    try {
-      const cookies = request.headers.get('Cookie');
-      const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
-      const cookieMatch = cookies?.match(oauthStateRegex);
-      const stateId = cookieMatch?.[1];
-      if (stateId) {
-        await deleteOAuthState(stateId);
-      }
-    } catch {
-      // Ignore cleanup errors
-    }
-
-    await destroyAuthSession(request);
-    throw new Error('Authentication failed');
+    throw await createOAuthCallbackFailure(request, stateId, failureCode);
   }
 }
 

@@ -75,6 +75,17 @@ export const Route = createFileRoute('/auth/callback')({
 });
 ```
 
+For a normal callback with a non-empty `code` and `state`, a missing or
+expired local OAuth transaction is exposed as `OAuthCallbackError` with
+`isRecoverableOAuthCallbackError(error) === true`. The consuming adapter owns
+loop prevention: record a signed one-shot retry marker, start at most one new
+`login` flow, and render a terminal error on a second stale callback. Never
+retry state mismatches, malformed callbacks, provider/access errors,
+token-exchange failures, storage/configuration failures, or application
+actions. When handling a typed failure, append every value from
+`error.cleanupSetCookies` (or iterate `error.cleanupHeaders`) so repeated
+`Set-Cookie` headers are not collapsed.
+
 Do not return `SessionData`, access tokens, refresh tokens, or raw request
 context from a server function or route. Keep tenant membership checks and
 product-specific redirects in the app-owned wrapper, and configure TanStack

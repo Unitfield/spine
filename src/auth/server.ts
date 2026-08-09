@@ -6,6 +6,7 @@
  */
 
 export * from './auth.server';
+export * from './callback-errors';
 export * from './redis-session-storage.server';
 export * from './route-protection.server';
 export * from './token-refresh.server';
