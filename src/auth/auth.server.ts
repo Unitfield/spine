@@ -1249,6 +1249,7 @@ export async function handleCallback(request: Request): Promise<Response> {
   let callbackStage: OAuthCallbackStage = 'configuration';
 
   try {
+    stateId = getOAuthStateIdFromRequest(request);
     const config = getAuthConfig();
     const hasLandingPage = getEffectiveHasLandingPage(config);
     const requiresNonce = config.scope.split(/\s+/).includes('openid');
@@ -1265,8 +1266,6 @@ export async function handleCallback(request: Request): Promise<Response> {
       hasNonEmptyCallbackValue(kcAction) ||
       hasNonEmptyCallbackValue(kcActionStatus),
     );
-
-    stateId = getOAuthStateIdFromRequest(request);
 
     logger.info('OIDC callback received', {
       hasCode,
@@ -1330,6 +1329,9 @@ export async function handleCallback(request: Request): Promise<Response> {
         logger.warn('Access denied for this application', { clientId: config.clientId });
         // Clear any existing session and redirect to home without triggering new login
         callbackStage = 'storage';
+        if (stateId) {
+          await deleteOAuthState(stateId);
+        }
         const headers = await destroyAuthSession(request);
         appendOAuthStateCookieClear(headers);
         // Set error cookies to:
@@ -1343,7 +1345,7 @@ export async function handleCallback(request: Request): Promise<Response> {
           'Set-Cookie',
           serializeTemporaryAuthCookie(
             AUTH_ERROR_DESC_COOKIE,
-            errorDescription || 'You do not have access to this application.',
+            'You do not have access to this application.',
             { maxAge: 300 },
           ),
         );
@@ -1365,6 +1367,9 @@ export async function handleCallback(request: Request): Promise<Response> {
       if (error === 'login_required') {
         logger.info('Login required, user session may have expired');
         callbackStage = 'storage';
+        if (stateId) {
+          await deleteOAuthState(stateId);
+        }
         const headers = await destroyAuthSession(request);
         appendOAuthStateCookieClear(headers);
         // Use redirectUri to get correct base URL with port
@@ -1375,18 +1380,15 @@ export async function handleCallback(request: Request): Promise<Response> {
       
       // Handle other errors
       callbackStage = 'storage';
+      if (stateId) {
+        await deleteOAuthState(stateId);
+      }
       const headers = await destroyAuthSession(request);
       appendOAuthStateCookieClear(headers);
       headers.append(
         'Set-Cookie',
         serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, error, { maxAge: 300 }),
       );
-      if (errorDescription) {
-        headers.append(
-          'Set-Cookie',
-          serializeTemporaryAuthCookie(AUTH_ERROR_DESC_COOKIE, errorDescription, { maxAge: 300 }),
-        );
-      }
       // Use redirectUri to get correct base URL with port
       const redirectUri = new URL(config.redirectUri);
       const baseUrl = redirectUri.origin;

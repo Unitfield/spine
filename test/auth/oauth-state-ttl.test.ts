@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { isOAuthCallbackError } from '../../src/auth/callback-errors';
 
 const mocks = vi.hoisted(() => {
   const originalEnv = {
@@ -6,6 +7,7 @@ const mocks = vi.hoisted(() => {
     OIDC_AUTHORITY: process.env.OIDC_AUTHORITY,
     OIDC_CLIENT_ID: process.env.OIDC_CLIENT_ID,
     OIDC_REDIRECT_URI: process.env.OIDC_REDIRECT_URI,
+    OIDC_CLIENT_AUTH_METHOD: process.env.OIDC_CLIENT_AUTH_METHOD,
     OAUTH_STATE_TTL: process.env.OAUTH_STATE_TTL,
   };
   const configuredTtl = 37;
@@ -122,5 +124,43 @@ describe('OAuth state TTL configuration', () => {
     expect(response.headers.getSetCookie()).not.toContain(
       expect.stringContaining('Max-Age=600'),
     );
+  });
+
+  it('cleans the OAuth transaction when required OIDC configuration is missing', async () => {
+    const originalClientId = mocks.originalEnv.OIDC_CLIENT_ID;
+    delete process.env.OIDC_CLIENT_ID;
+    mocks.getOAuthState.mockClear();
+    mocks.deleteOAuthState.mockClear();
+    mocks.destroyAuthSession.mockClear();
+
+    try {
+      vi.resetModules();
+      const { handleCallback } = await import('../../src/auth/auth.server');
+      let thrown: unknown;
+
+      try {
+        await handleCallback(new Request(
+          'https://app.unitfield.com/auth/callback?code=authorization-code&state=expected-state',
+          { headers: { Cookie: 'unitfield_oauth_state_id=state-id' } },
+        ));
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(isOAuthCallbackError(thrown)).toBe(true);
+      expect(thrown).toMatchObject({
+        code: 'configuration_error',
+      });
+      expect(isOAuthCallbackError(thrown) && thrown.code).not.toBe('stale_transaction');
+      expect(mocks.getOAuthState).not.toHaveBeenCalled();
+      expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
+      expect(mocks.destroyAuthSession).toHaveBeenCalledOnce();
+    } finally {
+      if (originalClientId === undefined) {
+        delete process.env.OIDC_CLIENT_ID;
+      } else {
+        process.env.OIDC_CLIENT_ID = originalClientId;
+      }
+    }
   });
 });
