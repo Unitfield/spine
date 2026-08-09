@@ -243,6 +243,7 @@ describe('OAuth flow security boundaries', () => {
     expect(response.headers.get('location')).toBe('https://app.unitfield.com/auth/login');
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
     expect(response.headers.get('set-cookie')).toContain('Secure');
+    expect(response.headers.getSetCookie().join('\n')).not.toContain(invitationToken);
     expect(serializedLogCalls()).not.toContain(invitationToken);
     expect(serializedLogCalls()).not.toContain('error_description');
     expect(serializedLogCalls()).not.toContain('invitation_token');
@@ -487,6 +488,8 @@ describe('OAuth callback recovery contract', () => {
     );
 
     expect(response.headers.get('location')).toBe('https://app.unitfield.com/auth/login');
+    expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
+    expect(response.headers.getSetCookie().join('\n')).not.toContain('No%20access');
     expect(response.headers.getSetCookie()).toContain(
       'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
     );
@@ -498,9 +501,40 @@ describe('OAuth callback recovery contract', () => {
     );
 
     expect(response.headers.get('location')).toBe('https://app.unitfield.com');
+    expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
     expect(response.headers.getSetCookie()).toContain(
       'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
     );
+  });
+
+  it('deletes state and omits untrusted descriptions for generic provider errors', async () => {
+    const providerDescription = 'provider-description-secret';
+    const response = await handleCallback(
+      requestWithCallback(
+        `error=temporarily_unavailable&error_description=${providerDescription}`,
+      ),
+    );
+
+    expect(response.headers.get('location')).toBe('https://app.unitfield.com');
+    expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
+    expect(response.headers.getSetCookie().join('\n')).not.toContain(providerDescription);
+    expect(response.headers.getSetCookie().join('\n')).not.toContain('auth_error_desc');
+    expect(serializedLogCalls()).not.toContain(providerDescription);
+  });
+
+  it('fails closed when provider-error state cleanup fails', async () => {
+    mocks.deleteOAuthState.mockRejectedValue(new Error('provider state cleanup unavailable'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('error=access_denied&error_description=provider-secret'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.cleanupHeaders.getSetCookie()).toContain(
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+    expect(serializedLogCalls()).not.toContain('provider state cleanup unavailable');
   });
 
   it('preserves application-action callbacks without emitting recovery', async () => {
