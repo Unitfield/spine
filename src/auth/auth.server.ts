@@ -1292,8 +1292,9 @@ export async function handleCallback(request: Request): Promise<Response> {
             oauthState.state === state &&
             stateAge <= OAUTH_STATE_TTL_MS
           ) {
-            callbackStage = 'application_action';
+            callbackStage = 'storage';
             await deleteOAuthState(stateId);
+            callbackStage = 'application_action';
             const headers = new Headers();
             appendOAuthStateCookieClear(headers);
 
@@ -1454,8 +1455,9 @@ export async function handleCallback(request: Request): Promise<Response> {
 
     if (!hasCode) {
       if (kcActionStatus) {
-        callbackStage = 'application_action';
+        callbackStage = 'storage';
         await deleteOAuthState(stateId);
+        callbackStage = 'application_action';
         const headers = new Headers();
         appendOAuthStateCookieClear(headers);
 
