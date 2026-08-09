@@ -25,6 +25,7 @@ import {
   createOAuthState,
   getOAuthState,
   deleteOAuthState,
+  deleteOAuthRecoveryRecord,
   AUTH_ERROR_COOKIE_PREFIX,
 } from './redis-session-storage.server';
 import type { 
@@ -58,6 +59,12 @@ import {
   type OAuthCallbackFailureCode,
 } from './callback-errors';
 import { OAUTH_STATE_TTL_MS, OAUTH_STATE_TTL_SECONDS } from './oauth-state-config';
+import {
+  clearOAuthRecoveryIntentHeaders,
+  createOAuthRecoveryForLogin,
+  discardOAuthRecoveryForRequest,
+  isOAuthRecoveryEligibleCallback,
+} from './oauth-recovery.server';
 
 type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
 type LogoutScope = 'identity' | 'local' | 'all';
@@ -1078,6 +1085,9 @@ async function createOAuthCallbackFailure(
 ): Promise<OAuthCallbackError> {
   const cleanupHeaders = new Headers();
   let cleanupError: unknown;
+  const preserveRecoveryTicket =
+    failureCode === OAuthCallbackFailureCodes.StaleTransaction &&
+    isOAuthRecoveryEligibleCallback(request);
 
   if (stateId) {
     try {
@@ -1092,6 +1102,19 @@ async function createOAuthCallbackFailure(
     appendHeadersPreservingSetCookie(cleanupHeaders, sessionHeaders);
   } catch (error) {
     cleanupError ??= error;
+  }
+
+  if (!preserveRecoveryTicket || cleanupError) {
+    try {
+      const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
+      appendHeadersPreservingSetCookie(cleanupHeaders, recoveryHeaders);
+    } catch (error) {
+      cleanupError ??= error;
+      appendHeadersPreservingSetCookie(
+        cleanupHeaders,
+        clearOAuthRecoveryIntentHeaders(request),
+      );
+    }
   }
 
   appendOAuthStateCookieClear(cleanupHeaders);
@@ -1124,6 +1147,10 @@ export async function login(
   request: Request, 
   returnUrlOrOptions?: string | LoginOptions
 ): Promise<Response> {
+  let oauthStateId: string | null = null;
+  let recoveryTicket: string | null = null;
+  let recoveryCookie: string | null = null;
+
   try {
     const config = getAuthConfig();
     
@@ -1182,7 +1209,16 @@ export async function login(
     });
 
     // Store OAuth state in Redis
-    const stateId = await createOAuthState(oauthState);
+    oauthStateId = await createOAuthState(oauthState);
+
+    if (!options.kcAction) {
+      const recovery = await createOAuthRecoveryForLogin(request, {
+        state,
+        returnUrl,
+      }, config.redirectUri);
+      recoveryTicket = recovery.ticket;
+      recoveryCookie = recovery.cookie;
+    }
 
     const authorizationParameters: Record<string, string> = {
       redirect_uri: config.redirectUri,
@@ -1208,10 +1244,14 @@ export async function login(
     const headers = new Headers();
     headers.append(
       'Set-Cookie',
-      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, stateId, {
+      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, oauthStateId, {
         maxAge: OAUTH_STATE_TTL_SECONDS,
       }),
     );
+
+    if (recoveryCookie) {
+      headers.append('Set-Cookie', recoveryCookie);
+    }
 
     logger.info('OIDC authorization flow initiated', {
       clientId: config.clientId,
@@ -1225,6 +1265,26 @@ export async function login(
 
     return createRedirectResponse(authorizationUrl.toString(), { headers });
   } catch (error) {
+    if (oauthStateId) {
+      try {
+        await deleteOAuthState(oauthStateId);
+      } catch (cleanupError) {
+        logger.warn('OAuth login state cleanup failed', {
+          errorType: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+        });
+      }
+    }
+
+    if (recoveryTicket) {
+      try {
+        await deleteOAuthRecoveryRecord(recoveryTicket);
+      } catch (cleanupError) {
+        logger.warn('OAuth recovery intent cleanup failed', {
+          errorType: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+        });
+      }
+    }
+
     logger.error('Failed to initiate OAuth login', undefined, {
       errorType: error instanceof Error ? error.name : 'UnknownError',
     });
@@ -1294,9 +1354,11 @@ export async function handleCallback(request: Request): Promise<Response> {
           ) {
             callbackStage = 'storage';
             await deleteOAuthState(stateId);
+            const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
             callbackStage = 'application_action';
             const headers = new Headers();
             appendOAuthStateCookieClear(headers);
+            appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
             const redirectUrl = appendApplicationInitiatedActionResult(
               sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
@@ -1335,6 +1397,8 @@ export async function handleCallback(request: Request): Promise<Response> {
         }
         const headers = await destroyAuthSession(request);
         appendOAuthStateCookieClear(headers);
+        const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
+        appendHeadersPreservingSetCookie(headers, recoveryHeaders);
         // Set error cookies to:
         // 1. Prevent redirect loop (auth_error)
         // 2. Allow UI to show appropriate message (auth_error_type, auth_error_description)
@@ -1373,6 +1437,8 @@ export async function handleCallback(request: Request): Promise<Response> {
         }
         const headers = await destroyAuthSession(request);
         appendOAuthStateCookieClear(headers);
+        const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
+        appendHeadersPreservingSetCookie(headers, recoveryHeaders);
         // Use redirectUri to get correct base URL with port
         const redirectUri = new URL(config.redirectUri);
         const baseUrl = redirectUri.origin;
@@ -1386,6 +1452,8 @@ export async function handleCallback(request: Request): Promise<Response> {
       }
       const headers = await destroyAuthSession(request);
       appendOAuthStateCookieClear(headers);
+      const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
+      appendHeadersPreservingSetCookie(headers, recoveryHeaders);
       headers.append(
         'Set-Cookie',
         serializeTemporaryAuthCookie(AUTH_ERROR_COOKIE, error, { maxAge: 300 }),
@@ -1457,9 +1525,11 @@ export async function handleCallback(request: Request): Promise<Response> {
       if (kcActionStatus) {
         callbackStage = 'storage';
         await deleteOAuthState(stateId);
+        const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
         callbackStage = 'application_action';
         const headers = new Headers();
         appendOAuthStateCookieClear(headers);
+        appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
         const redirectUrl = appendApplicationInitiatedActionResult(
           sanitizeOAuthReturnUrl(oauthState.returnUrl, request) ?? '/',
@@ -1510,11 +1580,13 @@ export async function handleCallback(request: Request): Promise<Response> {
     // Clean up OAuth state from Redis
     callbackStage = 'storage';
     await deleteOAuthState(stateId);
+    const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
 
     // Combine headers and clear OAuth state cookie (app-specific)
     const headers = new Headers();
     appendHeadersPreservingSetCookie(headers, sessionHeaders);
     appendOAuthStateCookieClear(headers);
+    appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
     logger.info('OAuth callback processed successfully');
 

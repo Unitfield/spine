@@ -57,9 +57,32 @@ describe('package export map', () => {
     expect(serverModule.OAuthCallbackError).toBeDefined();
     expect(serverModule.isOAuthCallbackError).toBeDefined();
     expect(serverModule.isRecoverableOAuthCallbackError).toBeDefined();
+    expect(serverModule.consumeOAuthRecoveryIntent).toBeDefined();
+    expect(serverModule.clearOAuthRecoveryIntentHeaders).toBeDefined();
+    expect(serverModule.getOAuthRecoveryCookiePath).toBeDefined();
+    expect(serverModule.OAUTH_RECOVERY_COOKIE_NAME).toBeDefined();
+    expect(serverModule).not.toHaveProperty('OAUTH_RECOVERY_COOKIE_PATH');
     expect(rootServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
     expect(reactRouterServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
     expect(tanStackStartServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
+    expect(rootServerModule.consumeOAuthRecoveryIntent).toBe(
+      serverModule.consumeOAuthRecoveryIntent,
+    );
+    expect(reactRouterServerModule.consumeOAuthRecoveryIntent).toBe(
+      serverModule.consumeOAuthRecoveryIntent,
+    );
+    expect(tanStackStartServerModule.consumeOAuthRecoveryIntent).toBe(
+      serverModule.consumeOAuthRecoveryIntent,
+    );
+    expect(rootServerModule.OAUTH_RECOVERY_COOKIE_NAME).toBe(
+      serverModule.OAUTH_RECOVERY_COOKIE_NAME,
+    );
+    expect(rootServerModule.getOAuthRecoveryCookiePath).toBe(
+      serverModule.getOAuthRecoveryCookiePath,
+    );
     expect(clientModule).not.toHaveProperty('OAuthCallbackError');
+    expect(clientModule).not.toHaveProperty('consumeOAuthRecoveryIntent');
+    expect(clientModule).not.toHaveProperty('OAUTH_RECOVERY_COOKIE_NAME');
+    expect(clientModule).not.toHaveProperty('getOAuthRecoveryCookiePath');
   });
 });

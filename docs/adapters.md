@@ -77,14 +77,23 @@ export const Route = createFileRoute('/auth/callback')({
 
 For a normal callback with a non-empty `code` and `state`, a missing or
 expired local OAuth transaction is exposed as `OAuthCallbackError` with
-`isRecoverableOAuthCallbackError(error) === true`. The consuming adapter owns
-loop prevention: record a signed one-shot retry marker, start at most one new
-`login` flow, and render a terminal error on a second stale callback. Never
-retry state mismatches, malformed callbacks, provider/access errors,
-token-exchange failures, storage/configuration failures, or application
-actions. When handling a typed failure, append every value from
-`error.cleanupSetCookies` (or iterate `error.cleanupHeaders`) so repeated
-`Set-Cookie` headers are not collapsed.
+`isRecoverableOAuthCallbackError(error) === true`. The consuming adapter calls
+`consumeOAuthRecoveryIntent(request, error)` to atomically consume Spine's
+opaque, HttpOnly recovery ticket. A non-null `intent.returnUrl` is the
+original sanitized destination and may be passed to one fresh `login` flow;
+null means the ticket was omitted, mismatched, expired, replayed, or
+unavailable, so the adapter must terminate. Do not use a client boolean or
+callback query value as the retry budget or destination. Never retry state
+mismatches, malformed callbacks, provider/access errors, token-exchange
+failures, storage/configuration failures, or application actions. Append every
+value from `error.cleanupSetCookies` and
+`recovery.cleanupHeaders.getSetCookie()` (or iterate both headers) so repeated
+`Set-Cookie` headers are not collapsed. The recovery result also exposes the
+lossless `cleanupSetCookies` array; cleanup must precede replacement login
+cookies. If an adapter needs a standalone clear header, pass the actual
+callback request or configured redirect URI to `clearOAuthRecoveryIntentHeaders`
+or resolve its path with `getOAuthRecoveryCookiePath`; Spine never assumes a
+fixed `/auth/callback` pathname.
 
 Do not return `SessionData`, access tokens, refresh tokens, or raw request
 context from a server function or route. Keep tenant membership checks and

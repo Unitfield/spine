@@ -250,13 +250,23 @@ export async function loader({ request }: { request: Request }) {
 
 If the callback has a non-empty `code` and `state` but the local OAuth
 transaction is missing or expired, catch `OAuthCallbackError` and check
-`isRecoverableOAuthCallbackError` from a server entry point. The consuming
-adapter owns a signed, one-shot retry marker and may start one fresh `login`
-flow; do not retry state mismatches, malformed callbacks, provider errors,
-token-exchange failures, storage/configuration failures, or application
-actions. Merge `error.cleanupHeaders` with any retry response using repeated
-`Set-Cookie` appends (or use the lossless `cleanupSetCookies` values) so
-session and OAuth-state cleanup cookies are preserved.
+`isRecoverableOAuthCallbackError` from a server entry point. A consuming
+adapter may then call `consumeOAuthRecoveryIntent(request, error)`. Spine
+atomically consumes a separate opaque, HttpOnly recovery ticket and returns
+the originally sanitized `returnUrl` at most once; a null `intent` means the
+ticket was omitted, mismatched, expired, replayed, or unavailable and the
+adapter must render a terminal error. Start one fresh `login(request,
+intent.returnUrl)` only after a non-null intent. Never use a client boolean or
+callback return URL as the retry budget/destination, and never retry state
+mismatches, malformed callbacks, provider errors, token-exchange failures,
+storage/configuration failures, or application actions. Append both
+`error.cleanupHeaders` and `recovery.cleanupHeaders` with repeated
+`Set-Cookie` appends (or use `error.cleanupSetCookies` and
+`recovery.cleanupSetCookies`) before the fresh
+login response so cleanup cookies precede replacement OAuth cookies.
+The recovery cookie path follows the configured OIDC redirect URI; adapters
+with a custom callback route should pass the actual request to any standalone
+clear-header helper.
 
 ```ts
 // app/routes/auth.logout.tsx
