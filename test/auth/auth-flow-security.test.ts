@@ -537,6 +537,54 @@ describe('OAuth callback recovery contract', () => {
     expect(serializedLogCalls()).not.toContain('provider state cleanup unavailable');
   });
 
+  it('classifies application-action provider cleanup failure as storage error', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState({ kcAction: 'webauthn-register' }));
+    mocks.deleteOAuthState.mockRejectedValueOnce(new Error('action provider delete failed'));
+    const sessionHeaders = new Headers();
+    sessionHeaders.append('Set-Cookie', 'action-session-a=; Max-Age=0');
+    sessionHeaders.append('Set-Cookie', 'action-session-b=; Max-Age=0');
+    mocks.destroyAuthSession.mockResolvedValue(sessionHeaders);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback(
+        'error=access_denied&state=expected-state&kc_action_status=error',
+      ),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.deleteOAuthState).toHaveBeenCalledTimes(2);
+    expect(mocks.authorizationCodeGrant).not.toHaveBeenCalled();
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'action-session-a=; Max-Age=0',
+      'action-session-b=; Max-Age=0',
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+  });
+
+  it('classifies no-code action cleanup failure as storage error', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState({ kcAction: 'webauthn-register' }));
+    mocks.deleteOAuthState.mockRejectedValueOnce(new Error('action result delete failed'));
+    const sessionHeaders = new Headers();
+    sessionHeaders.append('Set-Cookie', 'action-result-a=; Max-Age=0');
+    sessionHeaders.append('Set-Cookie', 'action-result-b=; Max-Age=0');
+    mocks.destroyAuthSession.mockResolvedValue(sessionHeaders);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('state=expected-state&kc_action_status=success'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.deleteOAuthState).toHaveBeenCalledTimes(2);
+    expect(mocks.authorizationCodeGrant).not.toHaveBeenCalled();
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'action-result-a=; Max-Age=0',
+      'action-result-b=; Max-Age=0',
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+  });
+
   it('preserves application-action callbacks without emitting recovery', async () => {
     mocks.getOAuthState.mockResolvedValue(validOAuthState({ kcAction: 'webauthn-register' }));
 
