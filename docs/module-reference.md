@@ -15,6 +15,10 @@ Key exports:
 
 - `login`
 - `handleCallback`
+- `OAuthCallbackError`
+- `OAuthCallbackFailureCodes`
+- `isOAuthCallbackError`
+- `isRecoverableOAuthCallbackError`
 - `logout`
 - `getUser`
 - `requireAuth`

@@ -248,6 +248,16 @@ export async function loader({ request }: { request: Request }) {
 }
 ```
 
+If the callback has a non-empty `code` and `state` but the local OAuth
+transaction is missing or expired, catch `OAuthCallbackError` and check
+`isRecoverableOAuthCallbackError` from a server entry point. The consuming
+adapter owns a signed, one-shot retry marker and may start one fresh `login`
+flow; do not retry state mismatches, malformed callbacks, provider errors,
+token-exchange failures, storage/configuration failures, or application
+actions. Merge `error.cleanupHeaders` with any retry response using repeated
+`Set-Cookie` appends (or use the lossless `cleanupSetCookies` values) so
+session and OAuth-state cleanup cookies are preserved.
+
 ```ts
 // app/routes/auth.logout.tsx
 import { logout } from '@eminuckan/spine/react-router/server';

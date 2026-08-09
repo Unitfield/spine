@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => {
         jwks_uri: 'https://identity.unitfield.com/realms/unitfield/protocol/openid-connect/certs',
       })),
     },
+    discovery: vi.fn(async () => mocks.oidcConfiguration),
+    authorizationCodeGrant: vi.fn(),
   };
 });
 
@@ -67,7 +69,7 @@ vi.mock('jose', async (importOriginal) => {
 vi.mock('openid-client', () => ({
   ResponseBodyError: class ResponseBodyError extends Error {},
   allowInsecureRequests: Symbol('allowInsecureRequests'),
-  discovery: vi.fn(async () => mocks.oidcConfiguration),
+  discovery: mocks.discovery,
   None: vi.fn(() => ({})),
   ClientSecretBasic: vi.fn(() => ({})),
   ClientSecretPost: vi.fn(() => ({})),
@@ -75,6 +77,7 @@ vi.mock('openid-client', () => ({
   calculatePKCECodeChallenge: vi.fn(async () => 'pkce-challenge'),
   randomState: vi.fn(() => 'expected-state'),
   randomNonce: vi.fn(() => 'expected-nonce'),
+  authorizationCodeGrant: mocks.authorizationCodeGrant,
   buildAuthorizationUrl: vi.fn(
     () => new URL('https://identity.unitfield.com/authorize?client_id=unitfield-app'),
   ),
@@ -87,19 +90,66 @@ import {
   login,
   logout,
 } from '../../src/auth/auth.server';
+import {
+  OAuthCallbackError,
+  isOAuthCallbackError,
+  isRecoverableOAuthCallbackError,
+} from '../../src/auth/callback-errors';
 import { errors as joseErrors } from 'jose';
 
 function serializedLogCalls(): string {
   return JSON.stringify(Object.values(mocks.logger).flatMap((log) => log.mock.calls));
 }
 
+function validOAuthState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    state: 'expected-state',
+    codeVerifier: 'pkce-verifier',
+    nonce: 'expected-nonce',
+    returnUrl: '/dashboard',
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function requestWithCallback(
+  query: string,
+  cookie = 'unitfield_oauth_state_id=state-id',
+): Request {
+  return new Request(`https://app.unitfield.com/auth/callback?${query}`, {
+    headers: cookie ? { Cookie: cookie } : undefined,
+  });
+}
+
+async function getCallbackFailure(request: Request): Promise<OAuthCallbackError> {
+  try {
+    await handleCallback(request);
+  } catch (error) {
+    if (isOAuthCallbackError(error)) {
+      return error;
+    }
+
+    throw error;
+  }
+
+  throw new Error('Expected handleCallback to fail');
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   clearAuthServerCache();
   mocks.createOAuthState.mockResolvedValue('state-id');
+  mocks.createAuthSession.mockResolvedValue(new Headers());
   mocks.destroyAuthSession.mockResolvedValue(new Headers());
   mocks.destroyAuthSessionsByIdentitySession.mockResolvedValue(0);
+  mocks.getOAuthState.mockReset();
+  mocks.getOAuthState.mockResolvedValue(undefined);
+  mocks.deleteOAuthState.mockReset();
+  mocks.deleteOAuthState.mockResolvedValue(undefined);
   mocks.jwtVerify.mockReset();
+  mocks.discovery.mockReset();
+  mocks.discovery.mockResolvedValue(mocks.oidcConfiguration);
+  mocks.authorizationCodeGrant.mockReset();
   mocks.oidcConfiguration.serverMetadata.mockReturnValue({
     issuer: 'https://identity.unitfield.com/realms/unitfield',
     authorization_endpoint: 'https://identity.unitfield.com/authorize',
@@ -211,6 +261,259 @@ describe('OAuth flow security boundaries', () => {
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
     expect(response.headers.get('set-cookie')).toContain('Secure');
     expect(serializedLogCalls()).not.toContain(returnToken);
+  });
+});
+
+describe('OAuth callback recovery contract', () => {
+  it('marks a valid callback with a missing OAuth cookie as the only recoverable failure', async () => {
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state', ''),
+    );
+
+    expect(failure.code).toBe('stale_transaction');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(true);
+    expect(mocks.getOAuthState).not.toHaveBeenCalled();
+    expect(mocks.destroyAuthSession).toHaveBeenCalledOnce();
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+  });
+
+  it('marks an absent Redis transaction as recoverable stale state', async () => {
+    mocks.getOAuthState.mockResolvedValue(null);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('stale_transaction');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(true);
+    expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
+    expect(failure.cleanupHeaders.getSetCookie()).toContain(
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+  });
+
+  it('rejects an OpenID transaction without a nonce before token exchange', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState({ nonce: undefined }));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.authorizationCodeGrant).not.toHaveBeenCalled();
+  });
+
+  it('downgrades stale recovery when OAuth-state cleanup fails', async () => {
+    mocks.getOAuthState.mockResolvedValue(null);
+    mocks.deleteOAuthState.mockRejectedValue(new Error('Redis cleanup unavailable'));
+    const sessionHeaders = new Headers();
+    sessionHeaders.append('Set-Cookie', 'session-cleanup=; Max-Age=0');
+    mocks.destroyAuthSession.mockResolvedValue(sessionHeaders);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'session-cleanup=; Max-Age=0',
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+    expect(serializedLogCalls()).not.toContain('Redis cleanup unavailable');
+  });
+
+  it('downgrades stale recovery when auth-session cleanup fails', async () => {
+    mocks.getOAuthState.mockResolvedValue(null);
+    mocks.destroyAuthSession.mockRejectedValue(new Error('session cleanup unavailable'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+    expect(serializedLogCalls()).not.toContain('session cleanup unavailable');
+  });
+
+  it('marks an explicitly aged transaction as recoverable stale state', async () => {
+    mocks.getOAuthState.mockResolvedValue(
+      validOAuthState({ createdAt: Date.now() - 10 * 60 * 1000 - 1 }),
+    );
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('stale_transaction');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(true);
+  });
+
+  it('classifies missing callback state before transaction lookup', async () => {
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code', ''),
+    );
+
+    expect(failure.code).toBe('malformed_callback');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.getOAuthState).not.toHaveBeenCalled();
+  });
+
+  it('classifies missing callback code as malformed', async () => {
+    const failure = await getCallbackFailure(
+      requestWithCallback('state=expected-state'),
+    );
+
+    expect(failure.code).toBe('malformed_callback');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.getOAuthState).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact state mismatches non-recoverable', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState());
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=attacker-state'),
+    );
+
+    expect(failure.code).toBe('state_mismatch');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.authorizationCodeGrant).not.toHaveBeenCalled();
+  });
+
+  it('does not turn Redis or JSON failures into stale recovery', async () => {
+    mocks.getOAuthState.mockRejectedValue(new SyntaxError('Unexpected token in state'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('storage_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.message).toBe('Authentication failed');
+    expect(serializedLogCalls()).not.toContain('Unexpected token in state');
+  });
+
+  it('classifies discovery and configuration failures as non-recoverable', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState());
+    mocks.discovery.mockRejectedValue(new Error('provider configuration secret'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('configuration_error');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.message).toBe('Authentication failed');
+    expect(serializedLogCalls()).not.toContain('provider configuration secret');
+  });
+
+  it('classifies token exchange failures without exposing provider details', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState());
+    mocks.authorizationCodeGrant.mockRejectedValue(new Error('invalid_grant provider-secret'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('token_exchange_failed');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(failure.message).toBe('Authentication failed');
+    expect(serializedLogCalls()).not.toContain('provider-secret');
+  });
+
+  it('classifies session creation failures as non-recoverable', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState());
+    mocks.authorizationCodeGrant.mockResolvedValue({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      id_token: 'id-token',
+      expires_in: 3600,
+      claims: () => ({
+        sub: 'user-1',
+        email: 'user@example.com',
+        iss: 'https://identity.unitfield.com/realms/unitfield',
+      }),
+    });
+    mocks.createAuthSession.mockRejectedValue(new Error('session store unavailable'));
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.code).toBe('session_creation_failed');
+    expect(isRecoverableOAuthCallbackError(failure)).toBe(false);
+    expect(mocks.authorizationCodeGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(URL),
+      expect.objectContaining({
+        pkceCodeVerifier: 'pkce-verifier',
+        expectedState: 'expected-state',
+        expectedNonce: 'expected-nonce',
+      }),
+    );
+    expect(serializedLogCalls()).not.toContain('session store unavailable');
+  });
+
+  it('exposes cleanup cookies without collapsing repeated Set-Cookie headers', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState());
+    mocks.authorizationCodeGrant.mockRejectedValue(new Error('exchange failed'));
+    const sessionHeaders = new Headers();
+    sessionHeaders.append('Set-Cookie', 'session-a=; Max-Age=0');
+    sessionHeaders.append('Set-Cookie', 'session-b=; Max-Age=0');
+    mocks.destroyAuthSession.mockResolvedValue(sessionHeaders);
+
+    const failure = await getCallbackFailure(
+      requestWithCallback('code=authorization-code&state=expected-state'),
+    );
+
+    expect(failure.cleanupHeaders.getSetCookie()).toEqual([
+      'session-a=; Max-Age=0',
+      'session-b=; Max-Age=0',
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    ]);
+    expect(failure.cleanupSetCookies).toEqual(failure.cleanupHeaders.getSetCookie());
+  });
+
+  it('preserves provider access-denied behavior while clearing the OAuth cookie', async () => {
+    const response = await handleCallback(
+      requestWithCallback('error=access_denied&error_description=No+access'),
+    );
+
+    expect(response.headers.get('location')).toBe('https://app.unitfield.com/auth/login');
+    expect(response.headers.getSetCookie()).toContain(
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+  });
+
+  it('preserves login-required provider handling without recovery', async () => {
+    const response = await handleCallback(
+      requestWithCallback('error=login_required'),
+    );
+
+    expect(response.headers.get('location')).toBe('https://app.unitfield.com');
+    expect(response.headers.getSetCookie()).toContain(
+      'unitfield_oauth_state_id=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+  });
+
+  it('preserves application-action callbacks without emitting recovery', async () => {
+    mocks.getOAuthState.mockResolvedValue(validOAuthState({ kcAction: 'webauthn-register' }));
+
+    const response = await handleCallback(
+      requestWithCallback('state=expected-state&kc_action_status=success'),
+    );
+
+    expect(response.headers.get('location')).toBe(
+      '/dashboard?kc_action=webauthn-register&kc_action_status=success',
+    );
+    expect(mocks.authorizationCodeGrant).not.toHaveBeenCalled();
   });
 });
 

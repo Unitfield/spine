@@ -29,4 +29,37 @@ describe('package export map', () => {
     expect(tsdownConfig).toContain("'tanstack-start/index': 'src/tanstack-start/index.ts'");
     expect(tsdownConfig).toContain("'tanstack-start/server': 'src/tanstack-start/server.ts'");
   });
+
+  it('keeps OAuth callback errors on server-only wildcard surfaces', async () => {
+    const authServer = readFileSync(resolve(import.meta.dirname, '../src/auth/server.ts'), 'utf8');
+    const authClient = readFileSync(resolve(import.meta.dirname, '../src/auth/index.ts'), 'utf8');
+    const server = readFileSync(resolve(import.meta.dirname, '../src/server.ts'), 'utf8');
+    const reactRouterServer = readFileSync(
+      resolve(import.meta.dirname, '../src/react-router/server.ts'),
+      'utf8',
+    );
+    const tanStackStartServer = readFileSync(
+      resolve(import.meta.dirname, '../src/tanstack-start/server.ts'),
+      'utf8',
+    );
+
+    expect(authServer).toContain("export * from './callback-errors';");
+    expect(authClient).not.toContain('callback-errors');
+    expect(server).toContain("export * from './auth/server';");
+    expect(reactRouterServer).toContain("export * from '../server';");
+    expect(tanStackStartServer).toContain("export * from '../server';");
+
+    const serverModule = await import('../src/auth/server');
+    const rootServerModule = await import('../src/server');
+    const reactRouterServerModule = await import('../src/react-router/server');
+    const tanStackStartServerModule = await import('../src/tanstack-start/server');
+    const clientModule = await import('../src/auth/index');
+    expect(serverModule.OAuthCallbackError).toBeDefined();
+    expect(serverModule.isOAuthCallbackError).toBeDefined();
+    expect(serverModule.isRecoverableOAuthCallbackError).toBeDefined();
+    expect(rootServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
+    expect(reactRouterServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
+    expect(tanStackStartServerModule.OAuthCallbackError).toBe(serverModule.OAuthCallbackError);
+    expect(clientModule).not.toHaveProperty('OAuthCallbackError');
+  });
 });

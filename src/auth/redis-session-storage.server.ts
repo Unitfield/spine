@@ -9,6 +9,7 @@
 import Redis from 'ioredis';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthSessionSummary, SessionData, OAuthState } from './types';
+import { OAUTH_STATE_TTL_SECONDS } from './oauth-state-config';
 import { logger } from '../logging';
 
 // ============================================================================
@@ -48,9 +49,7 @@ const REDIS_KEYS = {
 
 const DEFAULT_SESSION_SECRET = 'default-secret-change-in-production';
 const DEFAULT_SESSION_TTL = 60 * 60 * 24 * 7;
-const DEFAULT_OAUTH_STATE_TTL = 10 * 60;
 
-const OAUTH_STATE_TTL = resolvePositiveIntegerEnv('OAUTH_STATE_TTL', DEFAULT_OAUTH_STATE_TTL);
 const SESSION_TTL = resolvePositiveIntegerEnv('SESSION_DEFAULT_TTL', resolvePositiveIntegerEnv('SESSION_TTL', DEFAULT_SESSION_TTL));
 
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || '__session_id';
@@ -786,26 +785,34 @@ export async function createOAuthState(state: OAuthState): Promise<string> {
   const stateId = crypto.randomUUID();
   const key = REDIS_KEYS.oauthState(stateId);
 
-  await getRedis().setex(key, OAUTH_STATE_TTL, JSON.stringify(state));
+  await getRedis().setex(key, OAUTH_STATE_TTL_SECONDS, JSON.stringify(state));
 
-  logger.debug('OAuth state created', { stateId, ttl: OAUTH_STATE_TTL });
+  logger.debug('OAuth state created', { hasStateId: true, ttl: OAUTH_STATE_TTL_SECONDS });
 
   return stateId;
 }
 
-export async function getOAuthState(stateId: string): Promise<OAuthState | null> {
+export async function getOAuthState(
+  stateId: string,
+  options?: { readonly throwOnMalformed?: boolean },
+): Promise<OAuthState | null> {
   const key = REDIS_KEYS.oauthState(stateId);
   const data = await getRedis().get(key);
 
   if (!data) {
-    logger.warn('OAuth state not found or expired', { stateId });
+    logger.warn('OAuth state not found or expired', { hasStateId: true });
     return null;
   }
 
   try {
     return JSON.parse(data);
   } catch (error) {
-    logger.error('Failed to parse OAuth state', error instanceof Error ? error : undefined);
+    logger.error('Failed to parse OAuth state', undefined, {
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
+    if (options?.throwOnMalformed) {
+      throw new Error('OAuth state storage failure');
+    }
     return null;
   }
 }
@@ -813,7 +820,7 @@ export async function getOAuthState(stateId: string): Promise<OAuthState | null>
 export async function deleteOAuthState(stateId: string): Promise<void> {
   const key = REDIS_KEYS.oauthState(stateId);
   await getRedis().del(key);
-  logger.debug('OAuth state deleted', { stateId });
+  logger.debug('OAuth state deleted', { hasStateId: true });
 }
 
 export async function cleanupExpiredOAuthStates(): Promise<number> {
