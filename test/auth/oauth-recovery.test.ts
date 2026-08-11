@@ -31,6 +31,7 @@ import {
   consumeOAuthRecoveryIntent,
   createOAuthRecoveryForLogin,
   getOAuthRecoveryCookiePath,
+  isOAuthRecoveryEligibleCallback,
   OAUTH_RECOVERY_COOKIE_NAME,
   OAUTH_RECOVERY_TTL_SECONDS,
 } from '../../src/auth/oauth-recovery.server';
@@ -179,6 +180,19 @@ describe('server-owned OAuth recovery intent', () => {
     expect(provider.intent).toBeNull();
     expect(action.intent).toBeNull();
     expect(mocks.consumeOAuthRecoveryRecord).not.toHaveBeenCalled();
+  });
+
+  it('identifies only ordinary callbacks eligible for a fresh root restart', () => {
+    expect(isOAuthRecoveryEligibleCallback(callbackRequest())).toBe(true);
+    expect(isOAuthRecoveryEligibleCallback(
+      callbackRequest('code=code&state=expected-state&error=access_denied'),
+    )).toBe(false);
+    expect(isOAuthRecoveryEligibleCallback(
+      callbackRequest('code=code&state=expected-state&kc_action_status=success'),
+    )).toBe(false);
+    expect(isOAuthRecoveryEligibleCallback(
+      callbackRequest('code=code'),
+    )).toBe(false);
   });
 
   it('uses the atomic result as a one-shot race budget', async () => {

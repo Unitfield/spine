@@ -254,12 +254,16 @@ transaction is missing or expired, catch `OAuthCallbackError` and check
 adapter may then call `consumeOAuthRecoveryIntent(request, error)`. Spine
 atomically consumes a separate opaque, HttpOnly recovery ticket and returns
 the originally sanitized `returnUrl` at most once; a null `intent` means the
-ticket was omitted, mismatched, expired, replayed, or unavailable and the
-adapter must render a terminal error. Start one fresh `login(request,
-intent.returnUrl)` only after a non-null intent. Never use a client boolean or
-callback return URL as the retry budget/destination, and never retry state
-mismatches, malformed callbacks, provider errors, token-exchange failures,
-storage/configuration failures, or application actions. Append both
+ticket was omitted, mismatched, expired, replayed, or unavailable. Start one
+fresh `login(request, intent.returnUrl)` only after a non-null intent. If the
+intent is null, a server adapter may start one fresh root `login(request)` only
+when both `isRecoverableOAuthCallbackError(error)` and
+`isOAuthRecoveryEligibleCallback(request)` are true; this fallback carries no
+return URL and never exchanges the stale callback code. Otherwise render a
+terminal error. Never use a client boolean or callback return URL as the retry
+budget/destination, and never retry state mismatches, malformed callbacks,
+provider errors, token-exchange failures, storage/configuration failures, or
+application actions. Append both
 `error.cleanupHeaders` and `recovery.cleanupHeaders` with repeated
 `Set-Cookie` appends (or use `error.cleanupSetCookies` and
 `recovery.cleanupSetCookies`) before the fresh
