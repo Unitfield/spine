@@ -19,6 +19,7 @@ Key exports:
 - `OAuthCallbackFailureCodes`
 - `isOAuthCallbackError`
 - `isRecoverableOAuthCallbackError`
+- `isOAuthRecoveryEligibleCallback`
 - `consumeOAuthRecoveryIntent`
 - `clearOAuthRecoveryIntentHeaders`
 - `getOAuthRecoveryCookiePath`

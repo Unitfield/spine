@@ -57,6 +57,7 @@ describe('package export map', () => {
     expect(serverModule.OAuthCallbackError).toBeDefined();
     expect(serverModule.isOAuthCallbackError).toBeDefined();
     expect(serverModule.isRecoverableOAuthCallbackError).toBeDefined();
+    expect(serverModule.isOAuthRecoveryEligibleCallback).toBeDefined();
     expect(serverModule.consumeOAuthRecoveryIntent).toBeDefined();
     expect(serverModule.clearOAuthRecoveryIntentHeaders).toBeDefined();
     expect(serverModule.getOAuthRecoveryCookiePath).toBeDefined();
@@ -74,6 +75,15 @@ describe('package export map', () => {
     expect(tanStackStartServerModule.consumeOAuthRecoveryIntent).toBe(
       serverModule.consumeOAuthRecoveryIntent,
     );
+    expect(rootServerModule.isOAuthRecoveryEligibleCallback).toBe(
+      serverModule.isOAuthRecoveryEligibleCallback,
+    );
+    expect(reactRouterServerModule.isOAuthRecoveryEligibleCallback).toBe(
+      serverModule.isOAuthRecoveryEligibleCallback,
+    );
+    expect(tanStackStartServerModule.isOAuthRecoveryEligibleCallback).toBe(
+      serverModule.isOAuthRecoveryEligibleCallback,
+    );
     expect(rootServerModule.OAUTH_RECOVERY_COOKIE_NAME).toBe(
       serverModule.OAUTH_RECOVERY_COOKIE_NAME,
     );
@@ -84,5 +94,6 @@ describe('package export map', () => {
     expect(clientModule).not.toHaveProperty('consumeOAuthRecoveryIntent');
     expect(clientModule).not.toHaveProperty('OAUTH_RECOVERY_COOKIE_NAME');
     expect(clientModule).not.toHaveProperty('getOAuthRecoveryCookiePath');
+    expect(clientModule).not.toHaveProperty('isOAuthRecoveryEligibleCallback');
   });
 });

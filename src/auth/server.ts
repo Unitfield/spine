@@ -12,6 +12,7 @@ export {
   clearOAuthRecoveryIntentHeaders,
   consumeOAuthRecoveryIntent,
   getOAuthRecoveryCookiePath,
+  isOAuthRecoveryEligibleCallback,
   OAUTH_RECOVERY_COOKIE_NAME,
   OAUTH_RECOVERY_TTL_SECONDS,
 } from './oauth-recovery.server';

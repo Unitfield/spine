@@ -80,12 +80,15 @@ expired local OAuth transaction is exposed as `OAuthCallbackError` with
 `isRecoverableOAuthCallbackError(error) === true`. The consuming adapter calls
 `consumeOAuthRecoveryIntent(request, error)` to atomically consume Spine's
 opaque, HttpOnly recovery ticket. A non-null `intent.returnUrl` is the
-original sanitized destination and may be passed to one fresh `login` flow;
-null means the ticket was omitted, mismatched, expired, replayed, or
-unavailable, so the adapter must terminate. Do not use a client boolean or
-callback query value as the retry budget or destination. Never retry state
-mismatches, malformed callbacks, provider/access errors, token-exchange
-failures, storage/configuration failures, or application actions. Append every
+original sanitized destination and may be passed to one fresh `login` flow.
+When `intent` is null, the adapter may start one fresh root `login(request)`
+only when both `isRecoverableOAuthCallbackError(error)` and
+`isOAuthRecoveryEligibleCallback(request)` are true; the root fallback has no
+return URL and never exchanges the stale callback code. Otherwise terminate.
+Do not use a client boolean or callback query value as the retry budget or
+destination. Never retry state mismatches, malformed callbacks,
+provider/access errors, token-exchange failures, storage/configuration
+failures, or application actions. Append every
 value from `error.cleanupSetCookies` and
 `recovery.cleanupHeaders.getSetCookie()` (or iterate both headers) so repeated
 `Set-Cookie` headers are not collapsed. The recovery result also exposes the

@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.11] - 2026-08-11
+
+### Added
+
+- Exposed the server-only `isOAuthRecoveryEligibleCallback` predicate so
+  adapters can distinguish an ordinary stale callback eligible for one fresh
+  root login from terminal callback failures.
+- Kept exact recovery-ticket consumption as the only source of a preserved
+  return URL; the fresh-root fallback never exchanges the stale callback code.
+
 ## [0.3.10] - 2026-08-09
 
 ### Added
