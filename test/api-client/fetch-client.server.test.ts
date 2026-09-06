@@ -157,12 +157,12 @@ describe('createFetchMiddleware token refresh isolation', () => {
     expect(await responseB.text()).toBe('Bearer shared-token');
   });
 
-  it('throws a terminal auth error for every failed refresh result', async () => {
+  it.each([true, false])('preserves refresh failure classification (terminal=%s)', async (terminal) => {
     const request = new Request('https://app.example.test/data');
     const middleware = createFetchMiddleware(request, {
       attemptTokenRefresh: vi.fn(async () => ({
         success: false,
-        shouldLogout: false,
+        shouldLogout: terminal,
         error: 'refresh failed',
       })),
       retryConfig: { maxRetries: 0 },
@@ -175,8 +175,9 @@ describe('createFetchMiddleware token refresh isolation', () => {
       fetch: vi.fn(),
     })).rejects.toMatchObject({
       name: 'APIClientError',
-      shouldLogout: true,
-      message: 'REFRESH_TOKEN_EXPIRED',
+      shouldLogout: terminal,
+      message: terminal ? 'REFRESH_TOKEN_EXPIRED' : 'AUTH_REFRESH_UNAVAILABLE',
+      response: { status: terminal ? 401 : 503 },
     });
   });
 });

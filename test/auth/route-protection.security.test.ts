@@ -53,23 +53,25 @@ beforeEach(() => {
 });
 
 describe('route protection session fail-closed behavior', () => {
-  it('does not swallow the logout redirect for an expired session without refresh', async () => {
+  it('routes expired sessions without refresh through conditional invalidation', async () => {
     mocks.getAuthSession.mockResolvedValue({
       user,
       accessToken: 'expired-access-token',
       expiresAt: Date.now() - 1,
     });
 
-    await expect(shouldRefreshToken(request)).rejects.toMatchObject({ status: 302 });
-    expect(mocks.logout).toHaveBeenCalledOnce();
+    mocks.refreshTokens.mockResolvedValue({ success: false, error: 'No refresh token available', shouldLogout: true, sessionInvalidated: true });
+    await expect(shouldRefreshToken(request)).resolves.toBe(true);
+    expect(mocks.logout).not.toHaveBeenCalled();
 
     await expect(protectRoute(request, 'auth', async () => 'loaded')).rejects.toMatchObject({
       status: 302,
     });
+    expect(mocks.logout).toHaveBeenCalledWith(expect.any(Request), { sessionInvalidated: true });
     expect(mocks.requireAuth).not.toHaveBeenCalled();
   });
 
-  it('logs out when a refresh fails even without a provider logout hint', async () => {
+  it('blocks protected work without logout when refresh is temporarily unavailable', async () => {
     mocks.getAuthSession.mockResolvedValue({
       user,
       accessToken: 'expired-access-token',
@@ -83,10 +85,11 @@ describe('route protection session fail-closed behavior', () => {
     });
 
     await expect(protectRoute(request, 'auth', async () => 'loaded')).rejects.toMatchObject({
-      status: 302,
+      status: 503,
     });
     expect(mocks.refreshTokens).toHaveBeenCalledOnce();
-    expect(mocks.logout).toHaveBeenCalledOnce();
+    expect(mocks.logout).not.toHaveBeenCalled();
+    expect(mocks.login).not.toHaveBeenCalled();
     expect(mocks.requireAuth).not.toHaveBeenCalled();
   });
 
@@ -96,6 +99,7 @@ describe('route protection session fail-closed behavior', () => {
       accessToken: 'expired-access-token',
       expiresAt: Date.now() - 1,
     });
+    mocks.refreshTokens.mockResolvedValue({ success: false, shouldLogout: true, sessionInvalidated: true });
 
     await expect(protectRoute(request, 'public', async () => 'anonymous')).rejects.toMatchObject({
       status: 302,
@@ -119,11 +123,11 @@ describe('route protection session fail-closed behavior', () => {
     const storageError = new Error('Redis unavailable');
     mocks.getAuthSession.mockRejectedValue(storageError);
 
-    await expect(shouldRefreshToken(request)).rejects.toBe(storageError);
+    await expect(shouldRefreshToken(request)).rejects.toMatchObject({ status: 503 });
     await expect(protectRoute(request, 'auth', async () => 'loaded')).rejects.toMatchObject({
-      status: 302,
+      status: 503,
     });
-    expect(mocks.login).toHaveBeenCalledOnce();
+    expect(mocks.login).not.toHaveBeenCalled();
   });
 });
 

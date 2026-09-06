@@ -383,14 +383,17 @@ export function createFetchMiddleware(
             return context.fetch(context.url, init);
           }
 
-          // A failed or malformed refresh must not fall through to the stale
-          // 401 response. Treat every unsuccessful refresh as a terminal auth
-          // failure so callers can clear their local session.
+          // Both outcomes block the request. Only a terminal provider/session
+          // rejection should clear the session; outages remain retryable.
+          const shouldLogout = refreshResult.shouldLogout === true;
           throw createClientError({
-            message: 'REFRESH_TOKEN_EXPIRED',
-            response: await toAPIResponse(context.response),
+            message: shouldLogout ? 'REFRESH_TOKEN_EXPIRED' : 'AUTH_REFRESH_UNAVAILABLE',
+            response: await toAPIResponse(shouldLogout ? context.response : new Response(null, {
+              status: 503,
+              headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+            })),
             config: responseRequestMeta.get(context.response),
-            shouldLogout: true,
+            shouldLogout,
             originalError: refreshResult,
             cause: refreshResult,
           });

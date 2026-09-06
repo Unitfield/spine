@@ -9,6 +9,7 @@ import { getAuthSession } from './redis-session-storage.server';
 import type { ProtectionLevel, UserInfo } from './types';
 import { logger } from '../logging';
 import { createRedirectResponse } from '../http/response';
+import { getTokenExpiry } from './token-expiry';
 
 // Refresh shortly before expiry. Keep this below common 5-minute access-token
 // lifetimes so a freshly issued token does not refresh again immediately.
@@ -24,44 +25,16 @@ function resolveRefreshThreshold(): number {
  */
 export async function shouldRefreshToken(request: Request): Promise<boolean> {
   try {
-    const sessionData = await getAuthSession(request);
-    const now = Date.now();
-    const sessionExpired =
-      typeof sessionData.expiresAt === 'number' && now >= sessionData.expiresAt;
+    const sessionData = await getAuthSession(request, { throwOnError: true });
+    const expiry = getTokenExpiry(sessionData);
+    const sessionExpired = expiry !== null && Date.now() >= expiry;
 
-    if (!sessionData.refreshToken || sessionData.refreshToken.length === 0) {
-      if (sessionExpired) {
-        logger.info('Token expired and no refresh token, forcing local application logout');
-        const logoutRequest = await createAutomaticLogoutRequest(request, 'expired-no-refresh-token');
-        throw await logout(logoutRequest);
-      }
-      return false;
+    if (!sessionData.refreshToken) {
+      // Let the refresh authority conditionally invalidate this generation.
+      // A separate, unconditional logout here could delete replacement tokens.
+      return sessionExpired;
     }
-
-    if (!sessionData.expiresAt || !sessionData.accessToken) {
-      return false;
-    }
-
-    // Check JWT expiry
-    let jwtExpiry: number | null = null;
-    try {
-      const tokenParts = sessionData.accessToken.split('.');
-      if (tokenParts.length === 3) {
-        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-        if (payload.exp) {
-          jwtExpiry = payload.exp * 1000;
-        }
-      }
-    } catch {
-      // Ignore JWT decode errors
-    }
-
-    const earliestExpiry = jwtExpiry && jwtExpiry < sessionData.expiresAt 
-      ? jwtExpiry 
-      : sessionData.expiresAt;
-    const timeUntilEarliestExpiry = earliestExpiry - now;
-
-    return timeUntilEarliestExpiry <= REFRESH_THRESHOLD;
+    return Boolean(sessionData.accessToken) && expiry !== null && expiry - Date.now() <= REFRESH_THRESHOLD;
   } catch (error) {
     // A redirect is the security boundary for expired sessions. Never turn it
     // into a `false` result, otherwise protected loaders can continue with the
@@ -71,8 +44,15 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
     }
 
     logger.error('Error checking token refresh', error instanceof Error ? error : undefined);
-    throw error;
+    throw authUnavailableResponse();
   }
+}
+
+function authUnavailableResponse(): Response {
+  return new Response('Authentication temporarily unavailable', {
+    status: 503,
+    headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+  });
 }
 
 /**
@@ -93,16 +73,16 @@ async function autoRefreshTokens(request: Request): Promise<void> {
           error: result.error ?? 'Refresh response did not include an access token',
         });
 
-        // Any failed refresh must fail closed. Keeping the expired session
-        // usable (even when a provider error is classified as transient) lets
-        // callers continue with an access token that the provider rejected.
-        logger.error('Refresh token unusable, forcing local application logout');
-        const logoutRequest = await createAutomaticLogoutRequest(request, 'refresh-failed');
-        throw await logout(logoutRequest);
+        // Temporary failures still block protected work, but leave the
+        // refreshable session intact for a later request.
+        if (result.shouldLogout !== true) throw authUnavailableResponse();
+        const logoutRequest = await createAutomaticLogoutRequest(request,
+          result.error === 'No refresh token available' ? 'expired-no-refresh-token' : 'refresh-failed');
+        throw await logout(logoutRequest, { sessionInvalidated: result.sessionInvalidated });
       }
     }
   } catch (error) {
-    if (error instanceof Response && error.status >= 300 && error.status < 400) {
+    if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
       throw error;
     }
     throw error;
@@ -338,7 +318,7 @@ async function applyConfiguredRouteResolution(
 
     return true;
   } catch (error) {
-    if (error instanceof Response && error.status >= 300 && error.status < 400) {
+    if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
       throw error;
     }
 
@@ -376,7 +356,7 @@ export async function protectRoute<T>(
         const user = await getUser(request);
         return loaderFn(user ?? undefined);
       } catch (error) {
-        if (error instanceof Response && error.status >= 300 && error.status < 400) {
+        if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
           throw error;
         }
         return loaderFn(undefined);
@@ -390,7 +370,7 @@ export async function protectRoute<T>(
         await applyConfiguredRouteResolution(request, user, url.pathname, protection);
         return loaderFn(user);
       } catch (error) {
-        if (error instanceof Response && error.status >= 300 && error.status < 400) {
+        if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
           throw error;
         }
         throw await login(request, getLoginReturnUrl(request, url.pathname, protection));
@@ -410,7 +390,7 @@ export async function protectRoute<T>(
 
         return loaderFn(user);
       } catch (error) {
-        if (error instanceof Response && error.status >= 300 && error.status < 400) {
+        if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
           throw error;
         }
         throw await login(request, getLoginReturnUrl(request, url.pathname, 'onboarding-required'));
@@ -438,7 +418,7 @@ export async function protectRoute<T>(
 
         return loaderFn(user);
       } catch (error) {
-        if (error instanceof Response && error.status >= 300 && error.status < 400) {
+        if (error instanceof Response && ((error.status >= 300 && error.status < 400) || error.status === 503)) {
           throw error;
         }
         throw await login(request, getLoginReturnUrl(request, url.pathname, 'subscription-required'));

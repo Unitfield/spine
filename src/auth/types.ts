@@ -180,6 +180,8 @@ export interface TokenRefreshResult {
   };
   error?: string;
   shouldLogout?: boolean;
+  /** Redis cleanup already completed; automatic logout must only clear cookies. */
+  sessionInvalidated?: boolean;
 }
 
 /**

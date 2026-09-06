@@ -14,6 +14,7 @@ import {
   OAUTH_STATE_TTL_SECONDS,
 } from './oauth-state-config';
 import { logger } from '../logging';
+import { getTokenExpiry } from './token-expiry';
 
 // ============================================================================
 // Redis Client Setup
@@ -46,6 +47,7 @@ const REDIS_KEYS = {
   oauthState: (stateId: string) => `${KEY_PREFIX}oauth:state:${stateId}`,
   oauthRecovery: (ticket: string) => `${KEY_PREFIX}oauth:recovery:${ticket}`,
   session: (sessionId: string) => `${KEY_PREFIX}session:${sessionId}`,
+  sessionRefreshLock: (sessionId: string) => `${KEY_PREFIX}session:refresh-lock:${sessionId}`,
   sessionByUser: (userId: string) => `${KEY_PREFIX}session:index:user:${userId}`,
   sessionBySid: (sid: string) => `${KEY_PREFIX}session:index:sid:${sid}`,
   sessionBySessionState: (sessionState: string) => `${KEY_PREFIX}session:index:session_state:${sessionState}`,
@@ -396,7 +398,7 @@ function decodeSessionData(value: string): string {
   ]).toString('utf8');
 }
 
-async function readSessionData(sessionId: string): Promise<SessionData | null> {
+async function readSessionData(sessionId: string, throwOnError = false): Promise<SessionData | null> {
   try {
     const sessionData = await getRedis().get(REDIS_KEYS.session(sessionId));
     if (!sessionData) {
@@ -405,9 +407,12 @@ async function readSessionData(sessionId: string): Promise<SessionData | null> {
     }
 
     await getRedis().expire(REDIS_KEYS.session(sessionId), SESSION_TTL);
-    return parseSessionData(sessionData);
+    return throwOnError
+      ? JSON.parse(decodeSessionData(sessionData)) as SessionData
+      : parseSessionData(sessionData);
   } catch (error) {
     logger.error('Failed to read session from Redis', error instanceof Error ? error : undefined);
+    if (throwOnError) throw error;
     return null;
   }
 }
@@ -554,13 +559,16 @@ export async function createAuthSession(
   });
 }
 
-export async function getAuthSession(request: Request): Promise<SessionData> {
+export async function getAuthSession(
+  request: Request,
+  options: { throwOnError?: boolean } = {},
+): Promise<SessionData> {
   const sessionId = await getSessionIdFromRequest(request);
   if (!sessionId) {
     return {};
   }
 
-  const session = await readSessionData(sessionId);
+  const session = await readSessionData(sessionId, options.throwOnError);
   if (!session) {
     return {};
   }
@@ -582,6 +590,102 @@ export async function getAuthSession(request: Request): Promise<SessionData> {
     createdAt: session.createdAt,
     lastActivity: session.lastActivity,
   };
+}
+
+/** Internal refresh coordination. The owner is never derived from client input. */
+export async function acquireAuthSessionRefreshLock(
+  sessionId: string,
+  owner: string,
+  ttlMs: number,
+): Promise<boolean> {
+  return await getRedis().set(REDIS_KEYS.sessionRefreshLock(sessionId), owner, 'PX', ttlMs, 'NX') === 'OK';
+}
+
+export async function releaseAuthSessionRefreshLock(sessionId: string, owner: string): Promise<void> {
+  await getRedis().eval(`
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+      return redis.call('DEL', KEYS[1])
+    end
+    return 0
+  `, 1, REDIS_KEYS.sessionRefreshLock(sessionId), owner);
+}
+
+type RefreshedSessionFields = Pick<SessionData, 'accessToken' | 'refreshToken' | 'idToken' | 'expiresAt' | 'lastActivity'>;
+
+export function hasSameAuthTokenGeneration(current: SessionData, expected: SessionData): boolean {
+  return current.accessToken === expected.accessToken &&
+    current.refreshToken === expected.refreshToken &&
+    current.idToken === expected.idToken &&
+    current.expiresAt === expected.expiresAt;
+}
+
+/** Delete only the rejected generation while its refresh lease is still owned. */
+export async function invalidateAuthSessionRefreshGeneration(
+  expected: SessionData & { sessionId: string },
+  owner: string,
+): Promise<'invalidated' | 'missing' | 'changed' | 'lock-lost'> {
+  const sessionKey = REDIS_KEYS.session(expected.sessionId);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const snapshot = await getRedis().get(sessionKey);
+    if (!snapshot) return 'missing';
+    const current = JSON.parse(decodeSessionData(snapshot)) as SessionData;
+    if (!hasSameAuthTokenGeneration(current, expected)) return 'changed';
+    const indexes = getSessionIndexKeys(current);
+    const result = Number(await getRedis().eval(`
+      if redis.call('GET', KEYS[2]) ~= ARGV[1] then return -1 end
+      local current = redis.call('GET', KEYS[1])
+      if not current then return -2 end
+      if current ~= ARGV[2] then return 0 end
+      redis.call('DEL', KEYS[1])
+      for i = 3, #KEYS do redis.call('SREM', KEYS[i], ARGV[3]) end
+      return 1
+    `, 2 + indexes.length, sessionKey, REDIS_KEYS.sessionRefreshLock(expected.sessionId), ...indexes,
+    owner, snapshot, expected.sessionId));
+    if (result === 1) return 'invalidated';
+    if (result === -1) return 'lock-lost';
+    if (result === -2) return 'missing';
+  }
+  throw new Error('Session changed repeatedly during refresh invalidation');
+}
+
+/**
+ * Merge tokens with the latest session and atomically compare the encrypted
+ * snapshot and lease owner. Redis never needs the session encryption key.
+ * A concurrent logout or replacement token generation cannot be overwritten.
+ */
+export async function saveRefreshedAuthSession(
+  expected: SessionData & { sessionId: string },
+  owner: string,
+  updates: RefreshedSessionFields,
+): Promise<'updated' | 'missing' | 'changed' | 'lock-lost'> {
+  const sessionKey = REDIS_KEYS.session(expected.sessionId);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const snapshot = await getRedis().get(sessionKey);
+    if (!snapshot) return 'missing';
+    const current = JSON.parse(decodeSessionData(snapshot)) as SessionData;
+    if (!hasSameAuthTokenGeneration(current, expected)) return 'changed';
+
+    const next = mergeSessionData(current, updates);
+    const indexes = getSessionIndexKeys(next);
+    const result = Number(await getRedis().eval(`
+      if redis.call('GET', KEYS[2]) ~= ARGV[1] then return -1 end
+      local current = redis.call('GET', KEYS[1])
+      if not current then return -2 end
+      if current ~= ARGV[2] then return 0 end
+      redis.call('SET', KEYS[1], ARGV[3], 'EX', ARGV[4])
+      for i = 3, #KEYS do
+        redis.call('SADD', KEYS[i], ARGV[5])
+        redis.call('EXPIRE', KEYS[i], ARGV[4])
+      end
+      return 1
+    `, 2 + indexes.length, sessionKey, REDIS_KEYS.sessionRefreshLock(expected.sessionId), ...indexes,
+    owner, snapshot, encodeSessionData(next), SESSION_TTL, expected.sessionId));
+    if (result === 1) return 'updated';
+    if (result === -1) return 'lock-lost';
+    if (result === -2) return 'missing';
+    // An unrelated session field changed. Read it again and preserve it.
+  }
+  throw new Error('Session changed repeatedly during token refresh');
 }
 
 export async function updateAuthSession(
@@ -611,9 +715,12 @@ export async function destroyAuthSession(request: Request): Promise<Headers> {
     await deleteSessionData(sessionId);
   }
 
-  return new Headers({
-    'Set-Cookie': serializeExpiredSessionCookie(),
-  });
+  return clearAuthSessionCookie();
+}
+
+/** Cookie cleanup after a generation was already invalidated atomically. */
+export function clearAuthSessionCookie(): Headers {
+  return new Headers({ 'Set-Cookie': serializeExpiredSessionCookie() });
 }
 
 export async function getCurrentAuthSessionId(request: Request): Promise<string | null> {
@@ -731,29 +838,6 @@ export async function requireAuthSession(request: Request): Promise<SessionData>
   return sessionData;
 }
 
-function getJwtExpiry(accessToken: string | undefined): number | null {
-  if (!accessToken) {
-    return null;
-  }
-
-  try {
-    const [, encodedPayload] = accessToken.split('.');
-    if (!encodedPayload) {
-      return null;
-    }
-
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, 'base64url').toString('utf8'),
-    ) as { exp?: unknown };
-
-    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
-      ? payload.exp * 1000
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function isSessionDataExpired(sessionData: SessionData): boolean {
   const now = Date.now();
   if (
@@ -763,7 +847,7 @@ function isSessionDataExpired(sessionData: SessionData): boolean {
     return true;
   }
 
-  const jwtExpiry = getJwtExpiry(sessionData.accessToken);
+  const jwtExpiry = getTokenExpiry(sessionData);
   return jwtExpiry !== null && now >= jwtExpiry;
 }
 

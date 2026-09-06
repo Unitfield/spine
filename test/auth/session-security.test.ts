@@ -32,6 +32,11 @@ beforeEach(() => {
 });
 
 describe('Redis-authoritative session checks', () => {
+  it.each([NaN, Infinity, -Infinity])('rejects invalid numeric stored expiry %s', async (expiresAt) => {
+    mocks.getAuthSession.mockResolvedValue({ sessionId: 'session-1', user, accessToken: 'opaque-token', expiresAt });
+    await expect(getUser(request)).resolves.toBeNull();
+  });
+
   it('does not return a user from an expired Redis session', async () => {
     mocks.getAuthSession.mockResolvedValue({
       sessionId: 'session-1',
@@ -72,6 +77,7 @@ describe('Redis-authoritative session checks', () => {
       success: false,
       error: 'No active session',
       shouldLogout: true,
+      sessionInvalidated: true,
     });
     expect(mocks.updateAuthSession).not.toHaveBeenCalled();
   });

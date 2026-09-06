@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
   pull_request:
 
 permissions:
@@ -16,6 +17,16 @@ concurrency:
 jobs:
   validate:
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -37,3 +48,5 @@ jobs:
 
       - name: Validate
         run: pnpm check
+        env:
+          SPINE_TEST_REDIS_URL: redis://127.0.0.1:6379

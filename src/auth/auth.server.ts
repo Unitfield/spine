@@ -15,7 +15,12 @@ import { createRemoteJWKSet, errors as joseErrors, jwtVerify } from 'jose';
 import {
   createAuthSession,
   getAuthSession,
-  updateAuthSession,
+  acquireAuthSessionRefreshLock,
+  releaseAuthSessionRefreshLock,
+  invalidateAuthSessionRefreshGeneration,
+  hasSameAuthTokenGeneration,
+  clearAuthSessionCookie,
+  saveRefreshedAuthSession,
   destroyAuthSession,
   isSessionValid,
   listAuthSessionDataForUser,
@@ -59,6 +64,7 @@ import {
   type OAuthCallbackFailureCode,
 } from './callback-errors';
 import { OAUTH_STATE_TTL_MS, OAUTH_STATE_TTL_SECONDS } from './oauth-state-config';
+import { getTokenExpiry } from './token-expiry';
 import {
   clearOAuthRecoveryIntentHeaders,
   createOAuthRecoveryForLogin,
@@ -1608,6 +1614,14 @@ export async function handleCallback(request: Request): Promise<Response> {
   }
 }
 
+function createLocalLogoutResponse(request: Request, headers: Headers): Response {
+  const url = new URL(request.url);
+  const returnUrl = sanitizeOAuthReturnUrl(url.searchParams.get('returnUrl'), request);
+  headers.append('Set-Cookie', serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, '', { maxAge: 0 }));
+  logger.info('Local application logout completed', { hasReturnUrl: Boolean(returnUrl) });
+  return createRedirectResponse(getAbsoluteRedirectUrl(request, returnUrl || '/'), { headers });
+}
+
 /**
  * Logout user.
  *
@@ -1616,7 +1630,13 @@ export async function handleCallback(request: Request): Promise<Response> {
  * `/auth/logout?logout=local` to clear only this app's Redis session without
  * bouncing the browser through the identity provider or revoking SSO tokens.
  */
-export async function logout(request: Request): Promise<Response> {
+export async function logout(
+  request: Request,
+  options: { sessionInvalidated?: boolean } = {},
+): Promise<Response> {
+  // This server-only option comes from refresh invalidation, never URL input.
+  // It must not reread, revoke or delete a replacement session generation.
+  if (options.sessionInvalidated) return createLocalLogoutResponse(request, clearAuthSessionCookie());
   try {
     const config = getAuthConfig();
     const url = new URL(request.url);
@@ -1629,24 +1649,12 @@ export async function logout(request: Request): Promise<Response> {
       logoutScope,
     });
     
+    if (logoutScope === 'local') {
+      return createLocalLogoutResponse(request, await destroyAuthSession(request));
+    }
+
     const sessionData = await getAuthSession(request);
     const idToken = sessionData.idToken;
-
-    if (logoutScope === 'local') {
-      // Local logout is RP-only cleanup. Tokens are server-side and become
-      // unreachable once the Redis session is destroyed; revoking the refresh
-      // token can also terminate the Keycloak SSO session for this user.
-      const headers = await destroyAuthSession(request);
-      const redirectUrl = returnUrl || '/';
-      const absoluteRedirectUrl = getAbsoluteRedirectUrl(request, redirectUrl);
-
-      headers.append(
-        'Set-Cookie',
-        serializeTemporaryAuthCookie(LOGOUT_RETURN_URL_COOKIE, '', { maxAge: 0 }),
-      );
-      logger.info('Local application logout completed', { hasReturnUrl: Boolean(returnUrl) });
-      return createRedirectResponse(absoluteRedirectUrl, { headers });
-    }
 
     const sessionHeaders = new Headers();
 
@@ -1832,38 +1840,13 @@ export async function handleFrontChannelLogout(request: Request): Promise<Respon
   }
 }
 
-function getAccessTokenExpiry(accessToken: string | undefined): number | null {
-  if (!accessToken) {
-    return null;
-  }
-
-  try {
-    const [, encodedPayload] = accessToken.split('.');
-    if (!encodedPayload) {
-      return null;
-    }
-
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, 'base64url').toString('utf8'),
-    ) as { exp?: unknown };
-
-    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
-      ? payload.exp * 1000
-      : null;
-  } catch {
-    // Opaque access tokens are valid provider contracts too; only reject a
-    // token here when it exposes a readable, already-expired JWT `exp` claim.
-    return null;
-  }
-}
-
 function isSessionExpired(sessionData: { accessToken?: string; expiresAt?: number }): boolean {
   const now = Date.now();
   if (typeof sessionData.expiresAt === 'number' && (!Number.isFinite(sessionData.expiresAt) || now >= sessionData.expiresAt)) {
     return true;
   }
 
-  const accessTokenExpiry = getAccessTokenExpiry(sessionData.accessToken);
+  const accessTokenExpiry = getTokenExpiry(sessionData);
   return accessTokenExpiry !== null && now >= accessTokenExpiry;
 }
 
@@ -1914,82 +1897,177 @@ export async function getAccessToken(request: Request): Promise<string | null> {
   }
 }
 
-/**
- * Refresh tokens
- */
+const REFRESH_REQUEST_TIMEOUT_MS = 15_000;
+const REFRESH_LOCK_TTL_MS = 20_000;
+
+function refreshFailure(error: string, shouldLogout = false): TokenRefreshResult {
+  return { success: false, error, shouldLogout };
+}
+
+function reusedRefreshResult(session: SessionData): TokenRefreshResult {
+  const expiry = getTokenExpiry(session);
+  return {
+    success: true,
+    tokens: {
+      access_token: session.accessToken!,
+      refresh_token: session.refreshToken,
+      id_token: session.idToken,
+      expires_in: expiry === null ? undefined : Math.max(0, Math.floor((expiry - Date.now()) / 1000)),
+    },
+  };
+}
+
+function hasNewUsableTokens(current: SessionData, previous: SessionData): boolean {
+  return Boolean(current.accessToken) && !isSessionExpired(current) && !hasSameAuthTokenGeneration(current, previous);
+}
+
+async function invalidateFailedRefresh(
+  request: Request,
+  expected: SessionData & { sessionId: string },
+  owner: string,
+  error: string,
+): Promise<TokenRefreshResult> {
+  const invalidated = await invalidateAuthSessionRefreshGeneration(expected, owner);
+  if (invalidated === 'invalidated' || invalidated === 'missing') {
+    return { ...refreshFailure(error, true), sessionInvalidated: true };
+  }
+  const latest = await getAuthSession(request, { throwOnError: true });
+  if (!latest.sessionId) return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+  return hasNewUsableTokens(latest, expected)
+    ? reusedRefreshResult(latest)
+    : refreshFailure('Session changed while refreshing tokens');
+}
+
+/** Refresh only a signed, existing session, serialized across server processes. */
 export async function refreshTokens(
   request: Request,
   refreshToken?: string
 ): Promise<TokenRefreshResult> {
+  let lock: { sessionId: string; owner: string } | undefined;
+  let attemptedSession: SessionData | undefined;
   try {
-    const sessionData = await getAuthSession(request);
-
-    // Refresh tokens are only authoritative when they are attached to an
-    // existing Redis session. In particular, never create a new session from
-    // a caller that has no signed session cookie.
-    if (!sessionData.sessionId) {
-      logger.warn('Cannot refresh tokens without an active Redis session');
-      return { success: false, error: 'No active session', shouldLogout: true };
+    const initial = await getAuthSession(request, { throwOnError: true });
+    if (!initial.sessionId) return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+    if (refreshToken && refreshToken !== initial.refreshToken) {
+      return refreshFailure('Refresh token does not match active session', true);
     }
 
-    const sessionRefreshToken = sessionData.refreshToken;
-    if (!sessionRefreshToken) {
-      logger.warn('No refresh token available');
-      return { success: false, error: 'No refresh token available', shouldLogout: true };
+    if (!initial.refreshToken) {
+      const owner = crypto.randomUUID();
+      if (!await acquireAuthSessionRefreshLock(initial.sessionId, owner, REFRESH_LOCK_TTL_MS)) {
+        return refreshFailure('Token refresh is still in progress');
+      }
+      lock = { sessionId: initial.sessionId, owner };
+      return await invalidateFailedRefresh(request, { ...initial, sessionId: initial.sessionId }, owner, 'No refresh token available');
     }
 
-    if (refreshToken && refreshToken !== sessionRefreshToken) {
-      logger.warn('Rejected refresh token that does not match the active Redis session');
-      return { success: false, error: 'Refresh token does not match active session', shouldLogout: true };
+    // Discovery is outside the lease. A fresh configuration bounds refresh HTTP
+    // requests without mutating the configuration used by login and logout.
+    const discovered = await getOAuthConfig();
+    const config = getAuthConfig();
+    const refreshConfig = new oidc.Configuration(
+      discovered.serverMetadata(), config.clientId, getClientMetadata(config), getClientAuthentication(config),
+    );
+    refreshConfig.timeout = REFRESH_REQUEST_TIMEOUT_MS / 1000;
+    if (shouldAllowInsecureOidcRequests(config.authority)) oidc.allowInsecureRequests(refreshConfig);
+
+    const owner = crypto.randomUUID();
+    const deadline = Date.now() + REFRESH_LOCK_TTL_MS;
+    let session: SessionData;
+    while (true) {
+      if (await acquireAuthSessionRefreshLock(initial.sessionId, owner, REFRESH_LOCK_TTL_MS)) {
+        lock = { sessionId: initial.sessionId, owner };
+        session = await getAuthSession(request, { throwOnError: true });
+        break;
+      }
+      const latest = await getAuthSession(request, { throwOnError: true });
+      if (!latest.sessionId) return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+      if (!latest.refreshToken) return refreshFailure('Session changed while refreshing tokens');
+      if (hasNewUsableTokens(latest, initial)) return reusedRefreshResult(latest);
+      if (Date.now() >= deadline) return refreshFailure('Token refresh is still in progress');
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    const tokenToRefresh = sessionRefreshToken;
+    if (!session.sessionId) return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+    if (!session.refreshToken) return refreshFailure('Session changed while refreshing tokens');
+    if (hasNewUsableTokens(session, initial)) return reusedRefreshResult(session);
 
     logger.info('Initiating token refresh');
-
-    const oidcConfig = await getOAuthConfig();
-    const refreshResult = await oidc.refreshTokenGrant(oidcConfig, tokenToRefresh);
-
-    logger.info('Token refresh successful');
-
-    if (!refreshResult.access_token) {
-      logger.error('Token refresh returned no access token');
-      return { success: false, error: 'No access token in refresh response', shouldLogout: true };
+    attemptedSession = session;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: OidcTokenResponse;
+    try {
+      // The transport aborts at its timeout. The outer deadline also bounds a
+      // stuck response body; a late provider completion never runs persistence.
+      result = await Promise.race([
+        oidc.refreshTokenGrant(refreshConfig, session.refreshToken),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Token refresh timed out')), REFRESH_REQUEST_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
+    if (!result.access_token) return refreshFailure('No access token in refresh response');
 
-    const newRefreshToken = refreshResult.refresh_token || tokenToRefresh;
-    const expiresAt = refreshResult.expires_in
-      ? Date.now() + refreshResult.expires_in * 1000
-      : sessionData.expiresAt;
-
-    // Update session
-    await updateAuthSession(request, {
-      accessToken: refreshResult.access_token,
+    const newRefreshToken = result.refresh_token || session.refreshToken;
+    const expiresAt = getTokenExpiry({
+      accessToken: result.access_token,
+      expiresAt: typeof result.expires_in === 'number' && Number.isFinite(result.expires_in)
+        ? Date.now() + result.expires_in * 1000
+        : undefined,
+    }) ?? undefined;
+    if (isSessionExpired({ accessToken: result.access_token, expiresAt })) {
+      return refreshFailure('Refresh response contains an expired access token');
+    }
+    const saved = await saveRefreshedAuthSession({ ...session, sessionId: session.sessionId }, owner, {
+      accessToken: result.access_token,
       refreshToken: newRefreshToken,
-      idToken: refreshResult.id_token,
+      idToken: result.id_token ?? session.idToken,
       expiresAt,
       lastActivity: Date.now(),
     });
-
+    if (saved === 'missing') return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+    if (saved !== 'updated') {
+      const latest = await getAuthSession(request, { throwOnError: true });
+      if (!latest.sessionId) return { ...refreshFailure('No active session', true), sessionInvalidated: true };
+      if (!latest.refreshToken) return refreshFailure('Session changed while refreshing tokens');
+      return hasNewUsableTokens(latest, session)
+        ? reusedRefreshResult(latest)
+        : refreshFailure('Session changed while refreshing tokens');
+    }
+    logger.info('Token refresh successful');
     return {
       success: true,
       tokens: {
-        access_token: refreshResult.access_token,
+        access_token: result.access_token,
         refresh_token: newRefreshToken,
-        id_token: refreshResult.id_token,
-        expires_in: refreshResult.expires_in,
+        id_token: result.id_token ?? session.idToken,
+        expires_in: result.expires_in,
       },
     };
   } catch (error) {
-    logger.error('Token refresh failed with exception', error instanceof Error ? error : undefined);
-
-    return {
-      success: false,
-      error: getOAuthErrorMessage(error),
-      // A failed refresh leaves the current access token untrusted. Callers
-      // must clear the local session instead of continuing with stale auth.
-      shouldLogout: true,
-    };
+    logger.error('Token refresh failed', error instanceof Error ? error : undefined);
+    const terminal = error instanceof oidc.ResponseBodyError && error.error === 'invalid_grant' && error.status < 500;
+    if (terminal && lock && attemptedSession) {
+      try {
+        return await invalidateFailedRefresh(
+          request, { ...attemptedSession, sessionId: lock.sessionId }, lock.owner, getOAuthErrorMessage(error),
+        );
+      } catch {
+        return refreshFailure('Could not verify session after token refresh failure');
+      }
+    }
+    return refreshFailure(getOAuthErrorMessage(error), terminal);
+  } finally {
+    if (lock) {
+      try {
+        await releaseAuthSessionRefreshLock(lock.sessionId, lock.owner);
+      } catch (error) {
+        // Lease expiry is the fallback; cleanup must not replace the outcome.
+        logger.warn('Could not release token refresh lease', { error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    }
   }
 }
 
