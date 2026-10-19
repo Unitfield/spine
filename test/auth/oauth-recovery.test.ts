@@ -30,12 +30,17 @@ import {
   clearOAuthRecoveryIntentHeaders,
   consumeOAuthRecoveryIntent,
   createOAuthRecoveryForLogin,
+  discardOAuthRecoveryForRequest,
   getOAuthRecoveryCookiePath,
   isOAuthRecoveryEligibleCallback,
   OAUTH_RECOVERY_COOKIE_NAME,
   OAUTH_RECOVERY_TTL_SECONDS,
 } from '../../src/auth/oauth-recovery.server';
 import { OAuthCallbackError } from '../../src/auth/callback-errors';
+import {
+  getScopedOAuthCookieName,
+  OAUTH_STATE_COOKIE_NAME,
+} from '../../src/auth/oauth-transaction-cookies.server';
 
 function staleError(): OAuthCallbackError {
   return new OAuthCallbackError('stale_transaction');
@@ -68,6 +73,77 @@ beforeEach(() => {
 });
 
 describe('server-owned OAuth recovery intent', () => {
+  function scopedCallback(ticket: string, extraCookies = '') {
+    const name = getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, 'expected-state');
+    return new Request('https://app.unitfield.test/oidc/return?code=code&state=expected-state', {
+      headers: { Cookie: `${name}=${ticket}${extraCookies}` },
+    });
+  }
+
+  it('creates and clears recovery cookies with a bounded opaque exact-state name', async () => {
+    const state = 'opaque-state.public-context';
+    const name = getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, state);
+    const recovery = await createOAuthRecoveryForLogin(
+      new Request('https://app.unitfield.test/auth/login'),
+      { state, returnUrl: '/properties' },
+      'https://app.unitfield.test/oidc/return',
+      state,
+    );
+    expect(name).toMatch(/^unitfield_oauth_recovery_[a-f0-9]{64}$/);
+    expect(recovery.cookie).toBe(`${name}=opaque-ticket; Path=/oidc/return; HttpOnly; SameSite=Lax; Max-Age=${OAUTH_RECOVERY_TTL_SECONDS}; Secure`);
+    expect(recovery.cookie).not.toContain(state);
+    expect(setCookies(clearOAuthRecoveryIntentHeaders('/oidc/return', state))).toEqual([
+      `${name}=; Path=/oidc/return; HttpOnly; SameSite=Lax; Max-Age=0; Secure`,
+    ]);
+  });
+
+  it.each(['%', '', 'a'.repeat(769)])('does not consume a legacy ticket behind a malformed scoped recovery cookie: %s', async (ticket) => {
+    const result = await consumeOAuthRecoveryIntent(
+      scopedCallback(ticket, `; ${OAUTH_RECOVERY_COOKIE_NAME}=legacy-ticket`), staleError(),
+    );
+    expect(result.intent).toBeNull();
+    expect(mocks.consumeOAuthRecoveryRecord).not.toHaveBeenCalled();
+    expect(result.cleanupSetCookies).toHaveLength(1);
+    expect(result.cleanupSetCookies[0]).toMatch(/^unitfield_oauth_recovery_[a-f0-9]{64}=/);
+  });
+
+  it('does not consume a legacy ticket behind a duplicated matching scoped recovery cookie', async () => {
+    const name = getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, 'expected-state');
+    const result = await consumeOAuthRecoveryIntent(
+      scopedCallback('ticket-a', `; ${name}=ticket-b; ${OAUTH_RECOVERY_COOKIE_NAME}=legacy-ticket`), staleError(),
+    );
+    expect(result.intent).toBeNull();
+    expect(mocks.consumeOAuthRecoveryRecord).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to legacy recovery for a callback with its scoped state cookie', async () => {
+    const stateName = getScopedOAuthCookieName(OAUTH_STATE_COOKIE_NAME, 'expected-state');
+    const request = new Request('https://app.unitfield.test/auth/callback?code=code&state=expected-state', {
+      headers: { Cookie: `${stateName}=scoped-id; ${OAUTH_RECOVERY_COOKIE_NAME}=legacy-ticket` },
+    });
+    const result = await consumeOAuthRecoveryIntent(request, staleError());
+    expect(result.intent).toBeNull();
+    expect(mocks.consumeOAuthRecoveryRecord).not.toHaveBeenCalled();
+    expect(result.cleanupSetCookies.join('\n')).not.toContain(`${OAUTH_RECOVERY_COOKIE_NAME}=;`);
+  });
+
+  it('terminal scoped cleanup atomically validates the exact state without granting a restart', async () => {
+    const headers = await discardOAuthRecoveryForRequest(scopedCallback('opaque-ticket'));
+    expect(mocks.consumeOAuthRecoveryRecord).toHaveBeenCalledWith('opaque-ticket', 'expected-state');
+    expect(mocks.deleteOAuthRecoveryRecord).not.toHaveBeenCalled();
+    expect(setCookies(headers)).toEqual([
+      `${getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, 'expected-state')}=; Path=/oidc/return; HttpOnly; SameSite=Lax; Max-Age=0; Secure`,
+    ]);
+  });
+
+  it('has no cleanup or record selection when the callback has no usable state', async () => {
+    const request = callbackRequest('code=code');
+    expect(setCookies(clearOAuthRecoveryIntentHeaders(request))).toEqual([]);
+    expect(setCookies(await discardOAuthRecoveryForRequest(request))).toEqual([]);
+    expect((await consumeOAuthRecoveryIntent(request, staleError())).cleanupSetCookies).toEqual([]);
+    expect(mocks.consumeOAuthRecoveryRecord).not.toHaveBeenCalled();
+  });
+
   it('stores only a sanitized return URL behind an opaque ticket cookie', async () => {
     const recovery = await createOAuthRecoveryForLogin(
       new Request('https://app.unitfield.test/auth/login'),
@@ -122,7 +198,7 @@ describe('server-owned OAuth recovery intent', () => {
       `${OAUTH_RECOVERY_COOKIE_NAME}=; Path=/oidc/return/callback; HttpOnly; SameSite=Lax; Max-Age=0; Secure`,
     ]);
     expect(setCookies(clearOAuthRecoveryIntentHeaders(
-      new Request('https://app.unitfield.test/oidc/return/callback'),
+      '/oidc/return/callback',
     ))).toEqual([
       `${OAUTH_RECOVERY_COOKIE_NAME}=; Path=/oidc/return/callback; HttpOnly; SameSite=Lax; Max-Age=0; Secure`,
     ]);

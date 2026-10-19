@@ -1,3 +1,4 @@
+import { env as spineRuntimeEnv } from 'node:process';
 const AUTH_FLOW_PATHS = new Set(['/auth/login', '/auth/callback', '/auth/logout']);
 
 function isAuthFlowPath(path: string): boolean {
@@ -90,7 +91,7 @@ export function serializeTemporaryAuthCookie(
     `Max-Age=${options.maxAge}`,
   ];
 
-  if (process.env.NODE_ENV === 'production') {
+  if (spineRuntimeEnv.NODE_ENV === 'production') {
     segments.push('Secure');
   }
 

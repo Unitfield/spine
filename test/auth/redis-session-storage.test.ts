@@ -171,21 +171,25 @@ const redisMock = vi.hoisted(() => {
       return deleted;
     }
 
-    async eval(_script: string, _keyCount: number, key: string, expectedState: string): Promise<unknown> {
+    async eval(script: string, _keyCount: number, key: string, expectedState: string): Promise<unknown> {
+      const isStateDelete = script.includes("return redis.call('DEL', KEYS[1])");
       const entry = getEntry(key);
-      if (!entry || entry.kind !== 'string') return null;
+      if (!entry || entry.kind !== 'string') return isStateDelete ? 0 : null;
 
       const value = entry.value as string;
       let record: { state?: unknown };
       try {
         record = JSON.parse(value) as { state?: unknown };
       } catch {
-        return '__invalid__';
+        return isStateDelete ? 0 : '__invalid__';
+      }
+      if (!record || typeof record !== 'object' || typeof record.state !== 'string') {
+        return isStateDelete ? 0 : '__invalid__';
       }
 
-      if (record.state !== expectedState) return '__mismatch__';
+      if (record.state !== expectedState) return isStateDelete ? 0 : '__mismatch__';
       state.entries.delete(key);
-      return value;
+      return isStateDelete ? 1 : value;
     }
 
     async keys(pattern: string): Promise<string[]> {
@@ -371,6 +375,33 @@ describe('Redis session storage', () => {
     await expect(
       storage.consumeOAuthRecoveryRecord(ticket, 'expected-state'),
     ).resolves.toBeNull();
+  });
+
+  it('deletes callback state only on exact ownership while retaining unscoped cleanup compatibility', async () => {
+    const id = await storage.createOAuthState({ state: 'expected-state' });
+    await storage.deleteOAuthState(id, 'wrong-state');
+    await expect(storage.getOAuthState(id)).resolves.toEqual({ state: 'expected-state' });
+    await storage.deleteOAuthState(id, ' expected-state ');
+    await expect(storage.getOAuthState(id)).resolves.toEqual({ state: 'expected-state' });
+    await storage.deleteOAuthState(id, 'expected-state');
+    await expect(storage.getOAuthState(id)).resolves.toBeNull();
+    const legacyId = await storage.createOAuthState({ state: 'legacy-state' });
+    await storage.deleteOAuthState(legacyId);
+    await expect(storage.getOAuthState(legacyId)).resolves.toBeNull();
+  });
+
+  it('does not delete malformed state records during ownership-checked callback cleanup', async () => {
+    const key = 'spine-test:oauth:state:malformed-id';
+    redisMock.state.entries.set(key, { kind: 'string', value: '{invalid', expiresAt: null });
+    await storage.deleteOAuthState('malformed-id', 'expected-state');
+    expect(redisMock.state.entries.has(key)).toBe(true);
+  });
+
+  it('retains malformed recovery records when their exact state ownership is unknown', async () => {
+    const key = 'spine-test:oauth:recovery:malformed-ticket';
+    redisMock.state.entries.set(key, { kind: 'string', value: '{invalid', expiresAt: null });
+    await expect(storage.consumeOAuthRecoveryRecord('malformed-ticket', 'expected-state')).rejects.toThrow('OAuth recovery storage failure');
+    expect(redisMock.state.entries.has(key)).toBe(true);
   });
 
   it('gives a concurrent exact-state consume a single winner', async () => {

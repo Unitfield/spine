@@ -1,3 +1,4 @@
+import { env as spineRuntimeEnv } from 'node:process';
 /**
  * Redis Session Storage Server Module
  *
@@ -103,7 +104,7 @@ function resolvePositiveIntegerEnv(name: string, defaultValue: number): number {
 function resolveSessionSecret(): string {
   const secret = process.env.SESSION_SECRET?.trim();
   if (!secret || secret === DEFAULT_SESSION_SECRET) {
-    if (process.env.NODE_ENV === 'production') {
+    if (spineRuntimeEnv.NODE_ENV === 'production') {
       throw new Error('SESSION_SECRET must be set to a unique random value in production.');
     }
 
@@ -118,7 +119,7 @@ function resolveSessionSecret(): string {
 }
 
 function resolveCookieSecure(): boolean {
-  return resolveBooleanEnv('SESSION_COOKIE_SECURE', process.env.NODE_ENV === 'production');
+  return resolveBooleanEnv('SESSION_COOKIE_SECURE', spineRuntimeEnv.NODE_ENV === 'production');
 }
 
 function resolveCookieSameSite(): 'Lax' | 'Strict' | 'None' {
@@ -133,8 +134,8 @@ function resolveCookieSameSite(): 'Lax' | 'Strict' | 'None' {
 }
 
 function resolveSessionEncryptionEnabled(): boolean {
-  const enabled = resolveBooleanEnv('SESSION_ENCRYPTION', process.env.NODE_ENV === 'production');
-  if (process.env.NODE_ENV === 'production' && !enabled) {
+  const enabled = resolveBooleanEnv('SESSION_ENCRYPTION', spineRuntimeEnv.NODE_ENV === 'production');
+  if (spineRuntimeEnv.NODE_ENV === 'production' && !enabled) {
     throw new Error('SESSION_ENCRYPTION cannot be disabled in production.');
   }
 
@@ -905,9 +906,26 @@ export async function getOAuthState(
   }
 }
 
-export async function deleteOAuthState(stateId: string): Promise<void> {
+const DELETE_OAUTH_STATE_FOR_CALLBACK_SCRIPT = `
+local value = redis.call('GET', KEYS[1])
+if not value then
+  return 0
+end
+local ok, record = pcall(cjson.decode, value)
+if not ok or type(record) ~= 'table' or record.state ~= ARGV[1] then
+  return 0
+end
+return redis.call('DEL', KEYS[1])
+`;
+
+export async function deleteOAuthState(stateId: string, expectedState?: string): Promise<void> {
   const key = REDIS_KEYS.oauthState(stateId);
-  await getRedis().del(key);
+  if (expectedState === undefined) {
+    await getRedis().del(key);
+  } else {
+    // Cookie IDs are opaque pointers; validate ownership atomically before DEL.
+    await getRedis().eval(DELETE_OAUTH_STATE_FOR_CALLBACK_SCRIPT, 1, key, expectedState);
+  }
   logger.debug('OAuth state deleted', { hasStateId: true });
 }
 
@@ -924,7 +942,6 @@ if not value then
 end
 local ok, record = pcall(cjson.decode, value)
 if not ok or type(record) ~= 'table' or type(record.state) ~= 'string' then
-  redis.call('DEL', KEYS[1])
   return '__invalid__'
 end
 if record.state ~= ARGV[1] then

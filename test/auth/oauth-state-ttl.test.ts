@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { isOAuthCallbackError } from '../../src/auth/callback-errors';
+import { getScopedOAuthCookieName, OAUTH_STATE_COOKIE_NAME, OAUTH_RECOVERY_COOKIE_NAME } from '../../src/auth/oauth-transaction-cookies.server';
 
 const mocks = vi.hoisted(() => {
   const originalEnv = {
@@ -125,13 +126,13 @@ describe('OAuth state TTL configuration', () => {
     );
 
     expect(response.headers.getSetCookie()).toContain(
-      `unitfield_oauth_state_id=state-id; Path=/; HttpOnly; SameSite=Lax; Max-Age=${mocks.configuredTtl}; Secure`,
+      `${getScopedOAuthCookieName(OAUTH_STATE_COOKIE_NAME, 'expected-state')}=state-id; Path=/; HttpOnly; SameSite=Lax; Max-Age=${mocks.configuredTtl}; Secure`,
     );
     expect(response.headers.getSetCookie()).not.toContain(
       expect.stringContaining('Max-Age=600'),
     );
     expect(response.headers.getSetCookie()).toContain(
-      'unitfield_oauth_recovery=recovery-ticket; Path=/oidc/callback; HttpOnly; SameSite=Lax; Max-Age=1800; Secure',
+      `${getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, 'expected-state')}=recovery-ticket; Path=/oidc/callback; HttpOnly; SameSite=Lax; Max-Age=1800; Secure`,
     );
   });
 
@@ -162,7 +163,7 @@ describe('OAuth state TTL configuration', () => {
       });
       expect(isOAuthCallbackError(thrown) && thrown.code).not.toBe('stale_transaction');
       expect(mocks.getOAuthState).not.toHaveBeenCalled();
-      expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id');
+      expect(mocks.deleteOAuthState).toHaveBeenCalledWith('state-id', 'expected-state');
       expect(mocks.destroyAuthSession).toHaveBeenCalledOnce();
     } finally {
       if (originalClientId === undefined) {
