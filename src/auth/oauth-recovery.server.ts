@@ -1,3 +1,4 @@
+import { env as spineRuntimeEnv } from 'node:process';
 /**
  * Server-only recovery intent for stale OAuth callbacks.
  *
@@ -9,8 +10,6 @@
 import {
   consumeOAuthRecoveryRecord,
   createOAuthRecoveryRecord,
-  deleteOAuthRecoveryRecord,
-  AUTH_ERROR_COOKIE_PREFIX,
 } from './redis-session-storage.server';
 import {
   isRecoverableOAuthCallbackError,
@@ -22,8 +21,15 @@ import {
 } from './oauth-state-config';
 import type { OAuthState } from './types';
 import { logger } from '../logging';
+import {
+  getOAuthCallbackState,
+  getScopedOAuthCookieName,
+  OAUTH_RECOVERY_COOKIE_NAME,
+  OAUTH_STATE_COOKIE_NAME,
+  readOAuthTransactionCookie,
+} from './oauth-transaction-cookies.server';
 
-export const OAUTH_RECOVERY_COOKIE_NAME = `${AUTH_ERROR_COOKIE_PREFIX}_oauth_recovery`;
+export { OAUTH_RECOVERY_COOKIE_NAME };
 export { OAUTH_RECOVERY_TTL_SECONDS };
 
 export interface OAuthRecoveryIntent {
@@ -34,7 +40,7 @@ export interface OAuthRecoveryIntent {
 export interface OAuthRecoveryConsumeResult {
   /** A server-record-backed destination, or null when recovery is unavailable. */
   readonly intent: OAuthRecoveryIntent | null;
-  /** Always clear the one-shot ticket cookie in the adapter response. */
+  /** Clear this callback's ticket; preserve a legacy pointer of unknown ownership. */
   readonly cleanupHeaders: Headers;
   /** Lossless repeated Set-Cookie values for runtimes without getSetCookie(). */
   readonly cleanupSetCookies: readonly string[];
@@ -45,43 +51,14 @@ export interface OAuthRecoveryLoginResult {
   readonly cookie: string;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function getCookieValue(request: Request): string | null {
-  const cookies = request.headers.get('Cookie');
-  if (!cookies) {
-    return null;
-  }
-
-  const cookieRegex = new RegExp(
-    `(?:^|;\\s*)${escapeRegExp(OAUTH_RECOVERY_COOKIE_NAME)}=([^;]*)`,
+function getRecoveryCookie(request: Request, state = getOAuthCallbackState(request)) {
+  const stateCookie = readOAuthTransactionCookie(request, OAUTH_STATE_COOKIE_NAME, state);
+  return readOAuthTransactionCookie(
+    request,
+    OAUTH_RECOVERY_COOKIE_NAME,
+    state,
+    !(stateCookie.present && stateCookie.scoped),
   );
-  const rawValue = cookies.match(cookieRegex)?.[1];
-  if (!rawValue) {
-    return null;
-  }
-
-  try {
-    const value = decodeURIComponent(rawValue);
-    return value.length > 0 ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function hasCookie(request: Request): boolean {
-  const cookies = request.headers.get('Cookie');
-  if (!cookies) {
-    return false;
-  }
-
-  return cookies.split(';').some((part) => {
-    const separator = part.indexOf('=');
-    return separator > 0 &&
-      part.slice(0, separator).trim() === OAUTH_RECOVERY_COOKIE_NAME;
-  });
 }
 
 const SAFE_FALLBACK_COOKIE_PATH = '/';
@@ -131,26 +108,32 @@ function serializeRecoveryCookie(
   ticket: string,
   maxAge: number,
   callbackPath: string,
+  cookieName = OAUTH_RECOVERY_COOKIE_NAME,
 ): string {
   const segments = [
-    `${OAUTH_RECOVERY_COOKIE_NAME}=${encodeURIComponent(ticket)}`,
+    `${cookieName}=${encodeURIComponent(ticket)}`,
     `Path=${callbackPath}`,
     'HttpOnly',
     'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ];
 
-  if (process.env.NODE_ENV === 'production') {
+  if (spineRuntimeEnv.NODE_ENV === 'production') {
     segments.push('Secure');
   }
 
   return segments.join('; ');
 }
 
-function appendRecoveryCookieClear(headers: Headers, callbackPath: string): void {
+function appendRecoveryCookieClear(
+  headers: Headers,
+  callbackPath: string,
+  cookieName: string | null = OAUTH_RECOVERY_COOKIE_NAME,
+): void {
+  if (!cookieName) return;
   headers.append(
     'Set-Cookie',
-    serializeRecoveryCookie('', 0, callbackPath),
+    serializeRecoveryCookie('', 0, callbackPath, cookieName),
   );
 }
 
@@ -173,9 +156,16 @@ function getSetCookieValues(headers: Headers): string[] {
  */
 export function clearOAuthRecoveryIntentHeaders(
   source: Request | URL | string,
+  state?: string,
 ): Headers {
   const headers = new Headers();
-  appendRecoveryCookieClear(headers, getOAuthRecoveryCookiePath(source));
+  const requestCookie = source instanceof Request ? getRecoveryCookie(source) : null;
+  const cookieName = state !== undefined
+    ? getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, state)
+    : requestCookie
+      ? requestCookie.scoped ? requestCookie.name : null
+      : OAUTH_RECOVERY_COOKIE_NAME;
+  appendRecoveryCookieClear(headers, getOAuthRecoveryCookiePath(source), cookieName);
   return headers;
 }
 
@@ -190,8 +180,10 @@ function hasNonEmptyParam(url: URL, name: string): boolean {
  */
 export function isOAuthRecoveryEligibleCallback(request: Request): boolean {
   const url = new URL(request.url);
+  const state = getOAuthCallbackState(request);
   return hasNonEmptyParam(url, 'code') &&
-    hasNonEmptyParam(url, 'state') &&
+    state !== null &&
+    !readOAuthTransactionCookie(request, OAUTH_STATE_COOKIE_NAME, state).malformed &&
     !url.searchParams.has('error') &&
     !url.searchParams.has('kc_action') &&
     !url.searchParams.has('kc_action_status');
@@ -214,11 +206,6 @@ function isRecoveryRecord(value: unknown): value is {
     Number.isFinite(record.createdAt);
 }
 
-function getCallbackState(request: Request): string | null {
-  const value = new URL(request.url).searchParams.get('state');
-  return value && value.trim().length > 0 ? value : null;
-}
-
 /**
  * Create the opaque ticket cookie for an ordinary login transaction.
  * Application-action transactions deliberately do not receive a recovery
@@ -228,9 +215,13 @@ export async function createOAuthRecoveryForLogin(
   request: Request,
   state: Pick<OAuthState, 'state' | 'returnUrl'>,
   redirectUri: string,
+  cookieState?: string,
 ): Promise<OAuthRecoveryLoginResult> {
   const returnUrl = sanitizeOAuthReturnUrl(state.returnUrl, request) ?? '/';
   const callbackPath = getOAuthRecoveryCookiePath(redirectUri);
+  const cookieName = cookieState === undefined
+    ? OAUTH_RECOVERY_COOKIE_NAME
+    : getScopedOAuthCookieName(OAUTH_RECOVERY_COOKIE_NAME, cookieState);
   const ticket = await createOAuthRecoveryRecord({
     state: state.state,
     returnUrl,
@@ -243,6 +234,7 @@ export async function createOAuthRecoveryForLogin(
       ticket,
       OAUTH_RECOVERY_TTL_SECONDS,
       callbackPath,
+      cookieName,
     ),
   };
 }
@@ -253,16 +245,21 @@ export async function createOAuthRecoveryForLogin(
  * cookie if deletion fails.
  */
 export async function discardOAuthRecoveryForRequest(request: Request): Promise<Headers> {
-  const ticket = getCookieValue(request);
+  const state = getOAuthCallbackState(request);
+  const cookie = getRecoveryCookie(request, state);
   const headers = new Headers();
-  if (!hasCookie(request)) {
+  if (!cookie.present || !state) {
     return headers;
   }
 
-  if (ticket) {
-    await deleteOAuthRecoveryRecord(ticket);
+  if (cookie.value) {
+    // Terminal cleanup consumes only this exact state, without issuing a retry.
+    const record = await consumeOAuthRecoveryRecord(cookie.value, state);
+    // A legacy singleton may belong to another pending transaction. Keep its
+    // browser pointer whenever exact-state ownership could not be established.
+    if (!record && !cookie.scoped) return headers;
   }
-  appendRecoveryCookieClear(headers, getOAuthRecoveryCookiePath(request));
+  appendRecoveryCookieClear(headers, getOAuthRecoveryCookiePath(request), cookie.name);
   return headers;
 }
 
@@ -278,20 +275,28 @@ export async function consumeOAuthRecoveryIntent(
   request: Request,
   callbackError: unknown,
 ): Promise<OAuthRecoveryConsumeResult> {
-  const cleanupHeaders = clearOAuthRecoveryIntentHeaders(request);
-  const cleanupSetCookies = getSetCookieValues(cleanupHeaders);
+  const cookie = getRecoveryCookie(request);
+  const result = (intent: OAuthRecoveryIntent | null = null, ownsLegacy = false): OAuthRecoveryConsumeResult => {
+    const cleanupHeaders = new Headers();
+    appendRecoveryCookieClear(
+      cleanupHeaders,
+      getOAuthRecoveryCookiePath(request),
+      cookie.scoped || ownsLegacy ? cookie.name : null,
+    );
+    return { intent, cleanupHeaders, cleanupSetCookies: getSetCookieValues(cleanupHeaders) };
+  };
 
   if (
     !isRecoverableOAuthCallbackError(callbackError) ||
     !isOAuthRecoveryEligibleCallback(request)
   ) {
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+    return result();
   }
 
-  const ticket = getCookieValue(request);
-  const callbackState = getCallbackState(request);
+  const ticket = cookie.value;
+  const callbackState = getOAuthCallbackState(request);
   if (!ticket || !callbackState) {
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+    return result();
   }
 
   let record: unknown;
@@ -301,26 +306,22 @@ export async function consumeOAuthRecoveryIntent(
     logger.warn('OAuth recovery record could not be consumed', {
       errorType: error instanceof Error ? error.name : 'UnknownError',
     });
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+    return result();
   }
 
-  if (!isRecoveryRecord(record)) {
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+  if (!isRecoveryRecord(record) || record.state !== callbackState) {
+    return result();
   }
 
   const age = Date.now() - record.createdAt;
   if (age < 0 || age > OAUTH_RECOVERY_TTL_MS) {
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+    return result(null, true);
   }
 
   const returnUrl = sanitizeOAuthReturnUrl(record.returnUrl, request);
   if (!returnUrl) {
-    return { intent: null, cleanupHeaders, cleanupSetCookies };
+    return result(null, true);
   }
 
-  return {
-    intent: { returnUrl },
-    cleanupHeaders,
-    cleanupSetCookies,
-  };
+  return result({ returnUrl }, true);
 }

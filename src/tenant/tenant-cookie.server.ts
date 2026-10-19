@@ -1,3 +1,4 @@
+import { env as spineRuntimeEnv } from 'node:process';
 /**
  * Tenant Cookie Server Module
  * 
@@ -19,7 +20,7 @@ const DEFAULT_TENANT_COOKIE_CONFIG: Required<TenantCookieConfig> = {
   name: '__spine_tenant',
   maxAge: 60 * 60 * 24 * 365,
   path: '/',
-  secure: process.env.NODE_ENV === 'production',
+  secure: spineRuntimeEnv.NODE_ENV === 'production',
   httpOnly: false,
   sameSite: 'Lax',
 };

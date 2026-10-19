@@ -1,3 +1,4 @@
+import { env as spineRuntimeEnv } from 'node:process';
 /**
  * OpenID Connect Authentication Server Module
  *
@@ -71,6 +72,15 @@ import {
   discardOAuthRecoveryForRequest,
   isOAuthRecoveryEligibleCallback,
 } from './oauth-recovery.server';
+
+import {
+  assertOAuthTransactionCapacity,
+  getOAuthCallbackState,
+  getScopedOAuthCookieName,
+  OAUTH_STATE_COOKIE_NAME,
+  readOAuthTransactionCookie,
+  type OAuthTransactionCookie,
+} from './oauth-transaction-cookies.server';
 
 type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
 type LogoutScope = 'identity' | 'local' | 'all';
@@ -311,7 +321,7 @@ function isLocalInsecureIssuer(authority: string): boolean {
 }
 
 function shouldAllowInsecureOidcRequests(authority: string): boolean {
-  if (process.env.NODE_ENV === 'production') {
+  if (spineRuntimeEnv.NODE_ENV === 'production') {
     return false;
   }
 
@@ -898,7 +908,6 @@ async function createSessionData(
 // Auth error cookie names - unique per application to prevent conflicts
 const AUTH_ERROR_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error`;
 const AUTH_ERROR_DESC_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_auth_error_desc`;
-const OAUTH_STATE_COOKIE = `${AUTH_ERROR_COOKIE_PREFIX}_oauth_state_id`;
 const LOGOUT_RETURN_URL_COOKIE = 'logout_return_url';
 
 /**
@@ -976,32 +985,6 @@ type OAuthCallbackStage =
   | 'session_creation'
   | 'storage';
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function getOAuthStateIdFromRequest(request: Request): string | null {
-  const cookies = request.headers.get('Cookie');
-  if (!cookies) {
-    return null;
-  }
-
-  const cookieRegex = new RegExp(
-    `(?:^|;\\s*)${escapeRegExp(OAUTH_STATE_COOKIE)}=([^;]*)`,
-  );
-  const cookieValue = cookies.match(cookieRegex)?.[1];
-  if (!cookieValue) {
-    return null;
-  }
-
-  try {
-    const stateId = decodeURIComponent(cookieValue);
-    return stateId.length > 0 ? stateId : null;
-  } catch {
-    return null;
-  }
-}
-
 function hasNonEmptyCallbackValue(value: string | null): value is string {
   return value !== null && value.trim().length > 0;
 }
@@ -1033,10 +1016,11 @@ function appendHeadersPreservingSetCookie(target: Headers, source: HeadersInit):
   }
 }
 
-function appendOAuthStateCookieClear(headers: Headers): void {
+function appendOAuthStateCookieClear(headers: Headers, cookieName: string | null): void {
+  if (!cookieName) return;
   headers.append(
     'Set-Cookie',
-    serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, '', { maxAge: 0 }),
+    serializeTemporaryAuthCookie(cookieName, '', { maxAge: 0 }),
   );
 }
 
@@ -1088,6 +1072,9 @@ async function createOAuthCallbackFailure(
   request: Request,
   stateId: string | null,
   failureCode: OAuthCallbackFailureCode,
+  callbackState: string | null,
+  stateCookie: OAuthTransactionCookie,
+  canClearStateCookie: boolean,
 ): Promise<OAuthCallbackError> {
   const cleanupHeaders = new Headers();
   let cleanupError: unknown;
@@ -1095,9 +1082,9 @@ async function createOAuthCallbackFailure(
     failureCode === OAuthCallbackFailureCodes.StaleTransaction &&
     isOAuthRecoveryEligibleCallback(request);
 
-  if (stateId) {
+  if (stateId && callbackState) {
     try {
-      await deleteOAuthState(stateId);
+      await deleteOAuthState(stateId, callbackState);
     } catch (error) {
       cleanupError = error;
     }
@@ -1123,7 +1110,10 @@ async function createOAuthCallbackFailure(
     }
   }
 
-  appendOAuthStateCookieClear(cleanupHeaders);
+  appendOAuthStateCookieClear(
+    cleanupHeaders,
+    canClearStateCookie ? stateCookie.name : null,
+  );
 
   const effectiveFailureCode = cleanupError
     ? OAuthCallbackFailureCodes.StorageError
@@ -1154,6 +1144,7 @@ export async function login(
   returnUrlOrOptions?: string | LoginOptions
 ): Promise<Response> {
   let oauthStateId: string | null = null;
+  let oauthStateValue: string | null = null;
   let recoveryTicket: string | null = null;
   let recoveryCookie: string | null = null;
 
@@ -1183,6 +1174,7 @@ export async function login(
       return createRedirectResponse(baseUrl, { headers });
     }
 
+    assertOAuthTransactionCapacity(request);
     const oidcConfig = await getOAuthConfig();
 
     // Generate PKCE challenge
@@ -1195,6 +1187,8 @@ export async function login(
     // hint for Keycloak themes, but callback validation still compares the
     // exact value stored server-side.
     const state = buildAuthorizationState(oidc.randomState(), options.publicStateContext);
+    oauthStateValue = state;
+    const stateCookieName = getScopedOAuthCookieName(OAUTH_STATE_COOKIE_NAME, state);
     const nonce = oidc.randomNonce();
 
     // Create OAuth state object
@@ -1221,7 +1215,7 @@ export async function login(
       const recovery = await createOAuthRecoveryForLogin(request, {
         state,
         returnUrl,
-      }, config.redirectUri);
+      }, config.redirectUri, state);
       recoveryTicket = recovery.ticket;
       recoveryCookie = recovery.cookie;
     }
@@ -1250,7 +1244,7 @@ export async function login(
     const headers = new Headers();
     headers.append(
       'Set-Cookie',
-      serializeTemporaryAuthCookie(OAUTH_STATE_COOKIE, oauthStateId, {
+      serializeTemporaryAuthCookie(stateCookieName, oauthStateId, {
         maxAge: OAUTH_STATE_TTL_SECONDS,
       }),
     );
@@ -1273,7 +1267,7 @@ export async function login(
   } catch (error) {
     if (oauthStateId) {
       try {
-        await deleteOAuthState(oauthStateId);
+        await deleteOAuthState(oauthStateId, oauthStateValue ?? undefined);
       } catch (cleanupError) {
         logger.warn('OAuth login state cleanup failed', {
           errorType: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
@@ -1313,15 +1307,26 @@ export async function login(
 export async function handleCallback(request: Request): Promise<Response> {
   let stateId: string | null = null;
   let callbackStage: OAuthCallbackStage = 'configuration';
+  let callbackState: string | null = null;
+  let canClearStateCookie = false;
+  let stateCookie: OAuthTransactionCookie = {
+    name: null, value: null, present: false, malformed: false, scoped: false,
+  };
 
   try {
-    stateId = getOAuthStateIdFromRequest(request);
+    callbackState = getOAuthCallbackState(request);
+    stateCookie = readOAuthTransactionCookie(request, OAUTH_STATE_COOKIE_NAME, callbackState);
+    stateId = stateCookie.value;
+    canClearStateCookie = stateCookie.scoped;
+    if (stateCookie.malformed) {
+      throw new OAuthCallbackError(OAuthCallbackFailureCodes.MalformedCallback);
+    }
     const config = getAuthConfig();
     const hasLandingPage = getEffectiveHasLandingPage(config);
     const requiresNonce = config.scope.split(/\s+/).includes('openid');
     const url = new URL(request.url);
     const code = url.searchParams.get('code');
-    const state = url.searchParams.get('state');
+    const state = callbackState;
     const error = url.searchParams.get('error');
     const errorDescription = url.searchParams.get('error_description');
     const kcAction = url.searchParams.get('kc_action');
@@ -1344,12 +1349,21 @@ export async function handleCallback(request: Request): Promise<Response> {
       redirectUri: config.redirectUri,
     });
 
+    // A legacy singleton can still belong to a different in-flight tab.
+    // Establish exact ownership before clearing its browser pointer.
+    if (error && stateId && !stateCookie.scoped) {
+      callbackStage = 'state';
+      const pendingState = await getOAuthState(stateId, { throwOnMalformed: true });
+      canClearStateCookie = !pendingState || pendingState.state === state;
+    }
+
     // Handle OAuth errors
     if (error) {
       if (kcActionStatus && hasState) {
         callbackStage = 'state';
         if (stateId) {
           const oauthState = await getOAuthState(stateId, { throwOnMalformed: true });
+          canClearStateCookie = stateCookie.scoped || !oauthState || oauthState.state === state;
           const stateAge = oauthState ? Date.now() - oauthState.createdAt : Number.POSITIVE_INFINITY;
 
           if (
@@ -1359,11 +1373,11 @@ export async function handleCallback(request: Request): Promise<Response> {
             stateAge <= OAUTH_STATE_TTL_MS
           ) {
             callbackStage = 'storage';
-            await deleteOAuthState(stateId);
+            await deleteOAuthState(stateId, state!);
             const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
             callbackStage = 'application_action';
             const headers = new Headers();
-            appendOAuthStateCookieClear(headers);
+            appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
             appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
             const redirectUrl = appendApplicationInitiatedActionResult(
@@ -1399,10 +1413,10 @@ export async function handleCallback(request: Request): Promise<Response> {
         // Clear any existing session and redirect to home without triggering new login
         callbackStage = 'storage';
         if (stateId) {
-          await deleteOAuthState(stateId);
+          await deleteOAuthState(stateId, state!);
         }
         const headers = await destroyAuthSession(request);
-        appendOAuthStateCookieClear(headers);
+        appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
         const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
         appendHeadersPreservingSetCookie(headers, recoveryHeaders);
         // Set error cookies to:
@@ -1439,10 +1453,10 @@ export async function handleCallback(request: Request): Promise<Response> {
         logger.info('Login required, user session may have expired');
         callbackStage = 'storage';
         if (stateId) {
-          await deleteOAuthState(stateId);
+          await deleteOAuthState(stateId, state!);
         }
         const headers = await destroyAuthSession(request);
-        appendOAuthStateCookieClear(headers);
+        appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
         const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
         appendHeadersPreservingSetCookie(headers, recoveryHeaders);
         // Use redirectUri to get correct base URL with port
@@ -1454,10 +1468,10 @@ export async function handleCallback(request: Request): Promise<Response> {
       // Handle other errors
       callbackStage = 'storage';
       if (stateId) {
-        await deleteOAuthState(stateId);
+        await deleteOAuthState(stateId, state!);
       }
       const headers = await destroyAuthSession(request);
-      appendOAuthStateCookieClear(headers);
+      appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
       const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
       appendHeadersPreservingSetCookie(headers, recoveryHeaders);
       headers.append(
@@ -1498,6 +1512,7 @@ export async function handleCallback(request: Request): Promise<Response> {
     // Retrieve OAuth state from Redis
     callbackStage = 'state';
     const oauthState = await getOAuthState(stateId, { throwOnMalformed: true });
+    canClearStateCookie = stateCookie.scoped || !oauthState || oauthState.state === state;
 
     if (!oauthState) {
       throw new OAuthCallbackError(
@@ -1530,11 +1545,11 @@ export async function handleCallback(request: Request): Promise<Response> {
     if (!hasCode) {
       if (kcActionStatus) {
         callbackStage = 'storage';
-        await deleteOAuthState(stateId);
+        await deleteOAuthState(stateId, state!);
         const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
         callbackStage = 'application_action';
         const headers = new Headers();
-        appendOAuthStateCookieClear(headers);
+        appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
         appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
         const redirectUrl = appendApplicationInitiatedActionResult(
@@ -1585,13 +1600,13 @@ export async function handleCallback(request: Request): Promise<Response> {
 
     // Clean up OAuth state from Redis
     callbackStage = 'storage';
-    await deleteOAuthState(stateId);
+    await deleteOAuthState(stateId, state!);
     const recoveryHeaders = await discardOAuthRecoveryForRequest(request);
 
     // Combine headers and clear OAuth state cookie (app-specific)
     const headers = new Headers();
     appendHeadersPreservingSetCookie(headers, sessionHeaders);
-    appendOAuthStateCookieClear(headers);
+    appendOAuthStateCookieClear(headers, canClearStateCookie ? stateCookie.name : null);
     appendHeadersPreservingSetCookie(headers, recoveryHeaders);
 
     logger.info('OAuth callback processed successfully');
@@ -1610,7 +1625,7 @@ export async function handleCallback(request: Request): Promise<Response> {
       errorType: error instanceof Error ? error.name : 'UnknownError',
     });
 
-    throw await createOAuthCallbackFailure(request, stateId, failureCode);
+    throw await createOAuthCallbackFailure(request, stateId, failureCode, callbackState, stateCookie, canClearStateCookie);
   }
 }
 
