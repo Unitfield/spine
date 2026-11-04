@@ -6,6 +6,83 @@ All notable changes to this project will be documented in this file.
 
 No unreleased changes.
 
+## [0.3.12] - 2026-11-05
+
+### Added
+
+- Added a server-only Redis refresh lease so concurrent token refreshes for one
+  session are serialized across server processes. A caller that loses the race
+  reuses the tokens the winner saved instead of redeeming the same rotating
+  refresh token a second time.
+- Added `TokenRefreshResult.sessionInvalidated`, set when a terminal refresh
+  failure has already deleted the Redis session, and an optional
+  `logout(request, { sessionInvalidated })` argument that then only clears the
+  session cookie without rereading or revoking a replacement session.
+- Added an optional `state` argument to `clearOAuthRecoveryIntentHeaders` to
+  clear the recovery cookie of one exact OAuth transaction.
+- Added `getAuthSession(request, { throwOnError })` so callers can tell a Redis
+  failure apart from a missing session.
+
+### Changed
+
+- Split token refresh failures into terminal and temporary. Only a provider
+  `invalid_grant` rejection, a missing or replaced session, or a missing
+  refresh token sets `shouldLogout: true`; provider outages, timeouts,
+  malformed refresh responses and lease contention now return
+  `shouldLogout: false` and keep the refreshable session. Consumers that
+  treated every failed `refreshTokens` or `attemptTokenRefresh` result as a
+  logout must read `shouldLogout` instead.
+- The fetch middleware now answers a temporary refresh failure with the
+  `AUTH_REFRESH_UNAVAILABLE` client error, a synthetic 503 and
+  `shouldLogout: false`, and keeps `REFRESH_TOKEN_EXPIRED` for terminal
+  failures.
+- `protectRoute` and `shouldRefreshToken` now throw a `503` response
+  (`Cache-Control: no-store`, `Retry-After: 5`) when renewal or session storage
+  is temporarily unavailable, instead of logging the user out. Route modules
+  must let a thrown `Response` through, as they already do for redirects.
+- A session with an expired token and no refresh token is now invalidated by the
+  same conditional refresh path, so it can no longer delete a session
+  generation that replaced it.
+- Refresh requests to the provider now time out after 15 seconds, and the token
+  expiry check uses the earlier of the stored `expiresAt` and the JWT `exp`
+  claim consistently across route protection, session validation and refresh.
+- OAuth transaction cookies are now scoped per callback state. The state
+  pointer and the recovery ticket cookie names gain a `_<sha256 of the exact
+  state>` suffix, so two login tabs no longer overwrite each other's pending
+  transaction. Cookie names still derive from the existing application cookie
+  prefix; no environment variable or configuration changes.
+- Adapters that inspect `Set-Cookie` names from `login` or recovery responses
+  must match the suffixed names (`<prefix>_oauth_state_id_<hash>` and
+  `<prefix>_oauth_recovery_<hash>`) instead of the bare names.
+  `OAUTH_RECOVERY_COOKIE_NAME` remains the exported base name.
+- An OAuth login that is in flight across the upgrade still completes: when no
+  scoped cookie exists, the callback and recovery paths fall back to the legacy
+  single-cookie names, and a legacy cookie is cleared only after its exact
+  state is verified.
+- A callback now deletes its Redis OAuth state only when the stored `state`
+  equals the callback's `state`, and a callback with a repeated or oversized
+  `state` parameter is not eligible for stale-callback recovery.
+- Read `NODE_ENV` through `node:process` in the server cookie helpers.
+
+### Security
+
+- Capped pending OAuth transactions at 8 per browser. `login` fails with
+  `Login failed` instead of growing the cookie header or evicting another tab's
+  transaction, and callbacks with an oversized, duplicated or malformed
+  cookie header are rejected as malformed.
+- Refresh persistence, lease release and invalidation compare the encrypted
+  Redis snapshot and the lease owner atomically, so a concurrent logout or a
+  newer token generation is never overwritten by a late refresh.
+- A late provider response after the refresh deadline no longer persists tokens.
+
+### Tested
+
+- Added a real-Redis token refresh integration suite covering concurrent
+  refresh coordination, provider outages, `invalid_grant` invalidation, lease
+  loss and concurrent logout. It runs when `SPINE_TEST_REDIS_URL` points at a
+  Redis server, which CI now provides, and is skipped otherwise.
+- Added per-state OAuth transaction cookie, recovery and capacity coverage.
+
 ## [0.3.11] - 2026-08-11
 
 ### Added
